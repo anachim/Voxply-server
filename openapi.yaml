@@ -1,0 +1,1691 @@
+openapi: 3.0.3
+info:
+  title: Voxply Hub API
+  version: "1.0"
+  description: |
+    REST + WebSocket API for a Voxply hub server. This file is the
+    protocol contract — implement a client in any language against
+    this spec without reading Rust source.
+
+    ## Authentication
+
+    All endpoints (except `/health`, `/info`, `/auth/*`, `/join/:code`)
+    require a Bearer token obtained from `POST /auth/verify`.
+
+    ### Auth flow
+
+    1. `POST /auth/challenge` with your hex-encoded Ed25519 public key.
+    2. Sign the returned `challenge` string with your Ed25519 private key.
+       - Sign the raw UTF-8 bytes of the challenge string (no prefix, no digest).
+       - Encode the 64-byte signature as lowercase hex.
+    3. `POST /auth/verify` with your public key, the challenge, and the hex signature.
+       - Optionally include a `security_nonce` + `security_level` for PoW (see below).
+    4. On success, receive a `token`. Send it as `Authorization: Bearer <token>` on all
+       subsequent requests.
+
+    ### Proof-of-Work (PoW)
+
+    Some hubs require callers to prove a security level before granting membership.
+    The algorithm:
+
+    ```
+    hash = SHA256(utf8(public_key_hex) || little_endian_u64(nonce))
+    level = number of leading zero BITS in hash
+    ```
+
+    To reach level N, iterate nonces starting from 1 until a hash with ≥ N leading
+    zero bits is found. Level 0 = no work required. Level 20 takes ~1M hashes on average.
+
+    Submit `security_nonce` (the winning nonce as a u64) and `security_level` (the
+    claimed level) in `POST /auth/verify`. The hub verifies independently.
+
+    ### Session scope
+
+    `POST /auth/verify` returns a `scope` field:
+    - `"member"` — full access.
+    - `"lobby"` — hub has a security lobby and your PoW level is below the minimum.
+      You can only call `/lobby/*` endpoints until promoted.
+
+    ## Bot authentication
+
+    Bot API endpoints (`/bot/*`) use `Authorization: Bearer <bot_token>` where the
+    token is the raw token returned at bot creation time (not a session token).
+
+servers:
+  - url: http://localhost:3000
+    description: Local development hub
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    User:
+      type: object
+      properties:
+        public_key: { type: string }
+        display_name: { type: string, nullable: true }
+        avatar: { type: string, nullable: true, description: "Base64-encoded image" }
+        online: { type: boolean }
+        group_role: { type: string, nullable: true }
+        is_bot: { type: boolean }
+
+    Channel:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_by: { type: string }
+        parent_id: { type: string, nullable: true }
+        is_category: { type: boolean }
+        display_order: { type: integer }
+        description: { type: string, nullable: true }
+        icon: { type: string, nullable: true }
+        color: { type: string, nullable: true }
+        custom_icon_svg: { type: string, nullable: true }
+        created_at: { type: integer, description: "Unix timestamp" }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        channel_id: { type: string }
+        sender: { type: string }
+        sender_name: { type: string, nullable: true }
+        content: { type: string }
+        created_at: { type: integer }
+        edited_at: { type: integer, nullable: true }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Attachment' }
+        reactions:
+          type: array
+          items: { $ref: '#/components/schemas/Reaction' }
+        reply_to: { $ref: '#/components/schemas/ReplyContext', nullable: true }
+
+    Attachment:
+      type: object
+      properties:
+        name: { type: string }
+        mime: { type: string }
+        data_b64: { type: string }
+
+    Reaction:
+      type: object
+      properties:
+        emoji: { type: string }
+        count: { type: integer }
+        me: { type: boolean }
+
+    ReplyContext:
+      type: object
+      properties:
+        message_id: { type: string }
+        sender: { type: string }
+        sender_name: { type: string, nullable: true }
+        content_preview: { type: string }
+
+    Role:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        permissions: { type: array, items: { type: string } }
+        priority: { type: integer }
+        display_separately: { type: boolean }
+
+    Invite:
+      type: object
+      properties:
+        code: { type: string }
+        created_by: { type: string }
+        max_uses: { type: integer, nullable: true }
+        uses: { type: integer }
+        expires_at: { type: integer, nullable: true }
+        created_at: { type: integer }
+
+    HubInfo:
+      type: object
+      properties:
+        hub_name: { type: string }
+        hub_url: { type: string }
+        hub_icon: { type: string, nullable: true }
+        require_invite: { type: boolean }
+        min_security_level: { type: integer }
+        challenge_mode: { type: string, enum: [off, click, puzzle, both] }
+
+    MeInfo:
+      type: object
+      properties:
+        public_key: { type: string }
+        display_name: { type: string, nullable: true }
+        avatar: { type: string, nullable: true }
+        approval_status: { type: string, enum: [approved, pending] }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+
+    DmMessage:
+      type: object
+      properties:
+        id: { type: string }
+        conversation_id: { type: string }
+        sender: { type: string }
+        sender_name: { type: string, nullable: true }
+        content: { type: string }
+        created_at: { type: integer }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Attachment' }
+        is_encrypted: { type: boolean }
+        delivery_failed: { type: boolean }
+
+    Conversation:
+      type: object
+      properties:
+        id: { type: string }
+        conv_type: { type: string }
+        members: { type: array, items: { type: string } }
+        created_at: { type: integer }
+        last_activity_at: { type: integer }
+
+    BotAdminInfo:
+      type: object
+      properties:
+        public_key: { type: string }
+        display_name: { type: string }
+        created_by: { type: string }
+        created_at: { type: integer }
+        webhook_url: { type: string, nullable: true }
+
+    BotDetail:
+      allOf:
+        - $ref: '#/components/schemas/BotAdminInfo'
+        - type: object
+          properties:
+            commands:
+              type: array
+              items:
+                type: object
+                properties:
+                  command: { type: string }
+                  description: { type: string }
+
+    LobbyStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [lobby, promoted, member] }
+        required_level: { type: integer }
+        current_level: { type: integer }
+        entered_at: { type: integer, nullable: true }
+        welcome_md: { type: string, nullable: true }
+
+    ChallengePrompt:
+      type: object
+      properties:
+        id: { type: string }
+        mode: { type: string, enum: [click, puzzle, both] }
+        prompt_svg: { type: string, nullable: true, description: "SVG puzzle image, present when mode includes puzzle" }
+        expires_at: { type: integer }
+
+    AllianceInfo:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_by: { type: string }
+        created_at: { type: integer }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+paths:
+
+  # ── Health ────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      summary: Liveness check
+      security: []
+      tags: [Health]
+      responses:
+        "200":
+          description: Hub is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /info:
+    get:
+      summary: Hub metadata
+      description: Returns public hub information. No auth required — used by clients before joining.
+      security: []
+      tags: [Health]
+      responses:
+        "200":
+          description: Hub info
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubInfo' }
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+
+  /auth/challenge:
+    post:
+      summary: Request an auth challenge
+      description: |
+        Returns a random nonce string. The client must sign this with its
+        Ed25519 private key and submit it to `POST /auth/verify`.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key]
+              properties:
+                public_key:
+                  type: string
+                  description: Hex-encoded Ed25519 public key (64 hex chars)
+      responses:
+        "200":
+          description: Challenge issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challenge: { type: string, description: "Random nonce string to sign" }
+
+  /auth/verify:
+    post:
+      summary: Verify signature and obtain session token
+      description: |
+        Submit the signed challenge to receive a Bearer token.
+
+        **Signing:** sign the raw UTF-8 bytes of the `challenge` string with your
+        Ed25519 private key. Encode the 64-byte signature as lowercase hex.
+
+        **PoW:** if the hub requires a security level > 0, compute:
+        `SHA256(utf8(public_key_hex) || little_endian_u64(nonce))` and find a
+        `nonce` (u64, starting from 1) whose hash has ≥ N leading zero bits.
+        Submit that nonce as `security_nonce` and N as `security_level`.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key, challenge, signature]
+              properties:
+                public_key: { type: string }
+                challenge: { type: string }
+                signature: { type: string, description: "Hex-encoded Ed25519 signature over the challenge bytes" }
+                invite_code: { type: string, description: "Required for invite-only hubs" }
+                security_nonce: { type: integer, format: int64, description: "PoW nonce" }
+                security_level: { type: integer, description: "Claimed PoW level" }
+                subkey_cert:
+                  type: object
+                  description: "Multi-device: links a device subkey to a master key"
+                challenge_token:
+                  type: string
+                  description: "Token from POST /challenge/verify (required when challenge_mode != off)"
+      responses:
+        "200":
+          description: Auth successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  scope:
+                    type: string
+                    enum: [member, lobby]
+                    description: "'lobby' means the user must complete PoW in /lobby before full access"
+        "401":
+          description: Invalid signature or banned
+
+  # ── Me ────────────────────────────────────────────────────────────────────
+
+  /me:
+    get:
+      summary: Get own profile and roles
+      tags: [Me]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeInfo' }
+    patch:
+      summary: Update display name and avatar
+      tags: [Me]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+                avatar: { type: string, nullable: true }
+
+  # ── Hub ───────────────────────────────────────────────────────────────────
+
+  /hub:
+    patch:
+      summary: Update hub name / icon (admin)
+      tags: [Hub]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hub_name: { type: string }
+                hub_icon: { type: string, nullable: true }
+
+  /hub/settings:
+    get:
+      summary: Get hub settings (admin)
+      tags: [Hub]
+      responses:
+        "200":
+          description: Hub settings object
+
+  /hub/members:
+    get:
+      summary: List all hub members including bots
+      tags: [Hub]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+
+  /hub/pending:
+    get:
+      summary: List users awaiting approval (admin)
+      tags: [Hub]
+
+  /hub/pending/{target_key}/approve:
+    post:
+      summary: Approve a pending user (admin)
+      tags: [Hub]
+      parameters:
+        - name: target_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /hub/icons:
+    get:
+      summary: List custom hub icons
+      tags: [Hub]
+    post:
+      summary: Upload a custom SVG icon (admin)
+      tags: [Hub]
+
+  /hub/icons/{icon_id}:
+    patch:
+      summary: Rename a hub icon (admin)
+      tags: [Hub]
+      parameters:
+        - name: icon_id
+          in: path
+          required: true
+          schema: { type: string }
+    delete:
+      summary: Delete a hub icon (admin)
+      tags: [Hub]
+      parameters:
+        - name: icon_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /hub/settings/lobby:
+    put:
+      summary: Update lobby / security level settings (admin)
+      tags: [Hub]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                min_security_level: { type: integer }
+                welcome_md: { type: string, nullable: true }
+
+  /hub/settings/challenge:
+    put:
+      summary: Update bot-challenge mode (admin)
+      tags: [Hub]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                challenge_mode: { type: string, enum: [off, click, puzzle, both] }
+
+  # ── Channels ──────────────────────────────────────────────────────────────
+
+  /channels:
+    get:
+      summary: List all channels and categories
+      tags: [Channels]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Channel' }
+    post:
+      summary: Create a channel or category (manage_channels)
+      tags: [Channels]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                is_category: { type: boolean }
+                parent_id: { type: string, nullable: true }
+                description: { type: string }
+
+  /channels/reorder:
+    post:
+      summary: Reorder channels (manage_channels)
+      tags: [Channels]
+
+  /channels/{channel_id}:
+    patch:
+      summary: Update channel (manage_channels)
+      tags: [Channels]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+    delete:
+      summary: Delete channel (manage_channels)
+      tags: [Channels]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /channels/{channel_id}/members:
+    get:
+      summary: List members currently in a voice channel
+      tags: [Channels]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /voice/populations:
+    get:
+      summary: Voice user count per channel
+      tags: [Voice]
+
+  /voice/active-users:
+    get:
+      summary: List all users in any voice channel
+      tags: [Voice]
+
+  /voice/participants:
+    get:
+      summary: Participants in the caller's current voice channel
+      tags: [Voice]
+
+  # ── Messages ──────────────────────────────────────────────────────────────
+
+  /channels/{channel_id}/messages:
+    get:
+      summary: Fetch message history
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: before
+          in: query
+          schema: { type: string }
+          description: Message ID cursor for pagination
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Message' }
+    post:
+      summary: Send a message
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                attachments:
+                  type: array
+                  items: { $ref: '#/components/schemas/Attachment' }
+                reply_to: { type: string, description: "Message ID being replied to" }
+
+  /channels/{channel_id}/messages/{message_id}:
+    patch:
+      summary: Edit own message
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content: { type: string }
+    delete:
+      summary: Delete message (own or manage_messages)
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /channels/{channel_id}/messages/{message_id}/reactions:
+    post:
+      summary: Add reaction to a message
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+
+  /channels/{channel_id}/messages/{message_id}/reactions/{emoji}:
+    delete:
+      summary: Remove own reaction
+      tags: [Messages]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: emoji
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Direct Messages ───────────────────────────────────────────────────────
+
+  /conversations:
+    get:
+      summary: List DM conversations
+      tags: [DMs]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Conversation' }
+    post:
+      summary: Create a DM conversation
+      tags: [DMs]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [members]
+              properties:
+                members:
+                  type: array
+                  items: { type: string }
+
+  /conversations/{conversation_id}/messages:
+    get:
+      summary: List messages in a DM conversation
+      tags: [DMs]
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DmMessage' }
+    post:
+      summary: Send a DM
+      tags: [DMs]
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                attachments:
+                  type: array
+                  items: { $ref: '#/components/schemas/Attachment' }
+                is_encrypted: { type: boolean }
+
+  # ── Friends ───────────────────────────────────────────────────────────────
+
+  /friends:
+    get:
+      summary: List accepted friends
+      tags: [Friends]
+    post:
+      summary: Send a friend request
+      tags: [Friends]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key]
+              properties:
+                public_key: { type: string }
+                hub_url: { type: string, description: "Required for federated (cross-hub) friends" }
+
+  /friends/pending:
+    get:
+      summary: List incoming pending friend requests
+      tags: [Friends]
+
+  /friends/{public_key}/accept:
+    post:
+      summary: Accept a friend request
+      tags: [Friends]
+      parameters:
+        - name: public_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /friends/{public_key}:
+    delete:
+      summary: Remove a friend
+      tags: [Friends]
+      parameters:
+        - name: public_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Invites ───────────────────────────────────────────────────────────────
+
+  /invites:
+    get:
+      summary: List active invites (manage_invites)
+      tags: [Invites]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Invite' }
+    post:
+      summary: Create an invite (manage_invites)
+      tags: [Invites]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_uses: { type: integer, nullable: true }
+                expires_at: { type: integer, nullable: true }
+
+  /invites/{code}:
+    delete:
+      summary: Revoke an invite (manage_invites)
+      tags: [Invites]
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Roles ─────────────────────────────────────────────────────────────────
+
+  /roles:
+    get:
+      summary: List roles
+      tags: [Roles]
+    post:
+      summary: Create a role (manage_roles)
+      tags: [Roles]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                permissions: { type: array, items: { type: string } }
+                priority: { type: integer }
+                display_separately: { type: boolean }
+
+  /roles/{role_id}:
+    patch:
+      summary: Update a role (manage_roles)
+      tags: [Roles]
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string }
+    delete:
+      summary: Delete a role (manage_roles)
+      tags: [Roles]
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /roles/{role_id}/members:
+    get:
+      summary: List members with this role
+      tags: [Roles]
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /users/{public_key}/roles:
+    get:
+      summary: Get roles assigned to a user
+      tags: [Roles]
+      parameters:
+        - name: public_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /users/{public_key}/roles/{role_id}:
+    put:
+      summary: Assign role to user (manage_roles)
+      tags: [Roles]
+      parameters:
+        - name: public_key
+          in: path
+          required: true
+          schema: { type: string }
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string }
+    delete:
+      summary: Remove role from user (manage_roles)
+      tags: [Roles]
+      parameters:
+        - name: public_key
+          in: path
+          required: true
+          schema: { type: string }
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Moderation ────────────────────────────────────────────────────────────
+
+  /moderation/bans:
+    get:
+      summary: List bans (manage_users)
+      tags: [Moderation]
+    post:
+      summary: Ban a user (manage_users)
+      tags: [Moderation]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_public_key]
+              properties:
+                target_public_key: { type: string }
+                reason: { type: string }
+
+  /moderation/bans/{target_key}:
+    delete:
+      summary: Unban (manage_users)
+      tags: [Moderation]
+      parameters:
+        - name: target_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /moderation/mutes:
+    get:
+      summary: List mutes (manage_users)
+      tags: [Moderation]
+    post:
+      summary: Mute a user (manage_users)
+      tags: [Moderation]
+
+  /moderation/mutes/{target_key}:
+    delete:
+      summary: Unmute (manage_users)
+      tags: [Moderation]
+      parameters:
+        - name: target_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /moderation/timeout:
+    post:
+      summary: Timeout a user (manage_users)
+      tags: [Moderation]
+
+  /moderation/kick:
+    post:
+      summary: Kick a user (manage_users)
+      tags: [Moderation]
+
+  /moderation/channels/{channel_id}/bans:
+    get:
+      summary: List per-channel bans
+      tags: [Moderation]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Ban user from a channel (manage_channels)
+      tags: [Moderation]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /moderation/channels/{channel_id}/bans/{target_key}:
+    delete:
+      summary: Remove channel ban (manage_channels)
+      tags: [Moderation]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: target_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /moderation/voice-mutes:
+    get:
+      summary: List voice mutes
+      tags: [Moderation]
+    post:
+      summary: Voice-mute a user (manage_users)
+      tags: [Moderation]
+
+  /moderation/voice-mutes/{target_key}:
+    delete:
+      summary: Remove voice mute
+      tags: [Moderation]
+      parameters:
+        - name: target_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /channels/{channel_id}/talk-power:
+    get:
+      summary: Get talk-power setting for channel
+      tags: [Moderation]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Set talk-power (manage_channels)
+      tags: [Moderation]
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Users ─────────────────────────────────────────────────────────────────
+
+  /users:
+    get:
+      summary: List all users
+      tags: [Users]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+
+  # ── Alliances ─────────────────────────────────────────────────────────────
+
+  /alliances:
+    get:
+      summary: List alliances this hub belongs to
+      tags: [Alliances]
+    post:
+      summary: Create an alliance (manage_hub)
+      tags: [Alliances]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+
+  /alliances/join:
+    post:
+      summary: Join an alliance via invite token (manage_hub)
+      tags: [Alliances]
+
+  /alliances/pending-invites:
+    get:
+      summary: List pending alliance invites received by this hub
+      tags: [Alliances]
+
+  /alliances/pending-invites/{invite_id}/accept:
+    post:
+      summary: Accept a pending alliance invite (manage_hub)
+      tags: [Alliances]
+      parameters:
+        - name: invite_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/pending-invites/{invite_id}:
+    delete:
+      summary: Decline a pending alliance invite
+      tags: [Alliances]
+      parameters:
+        - name: invite_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}:
+    get:
+      summary: Get alliance details and member hubs
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}/invite:
+    post:
+      summary: Create an invite token for another hub to join (manage_hub)
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}/leave:
+    delete:
+      summary: Leave an alliance (manage_hub)
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}/channels:
+    get:
+      summary: List channels shared into this alliance
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Share a channel into the alliance (manage_channels)
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}/channels/{channel_id}:
+    delete:
+      summary: Unshare a channel from the alliance
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /alliances/{alliance_id}/channels/{channel_id}/messages:
+    get:
+      summary: Fetch federated channel messages
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Post to a federated alliance channel
+      tags: [Alliances]
+      parameters:
+        - name: alliance_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Lobby ─────────────────────────────────────────────────────────────────
+
+  /lobby/status:
+    get:
+      summary: Get lobby status for the current user
+      description: Available when session scope is "lobby". Returns PoW progress.
+      tags: [Lobby]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LobbyStatus' }
+
+  /lobby/submit-pow:
+    post:
+      summary: Submit a PoW nonce to increase security level
+      description: |
+        Compute `SHA256(utf8(public_key_hex) || little_endian_u64(nonce))` and
+        find a nonce whose hash has ≥ N leading zero bits, then submit here.
+        On promotion, the session scope changes to "member".
+      tags: [Lobby]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nonce, claimed_level]
+              properties:
+                nonce: { type: integer, format: int64 }
+                claimed_level: { type: integer }
+
+  /lobby/welcome:
+    get:
+      summary: Get the hub's welcome message (Markdown)
+      tags: [Lobby]
+
+  # ── Bot Challenge ─────────────────────────────────────────────────────────
+
+  /challenge/new:
+    get:
+      summary: Fetch a bot-challenge prompt
+      description: |
+        Returns a challenge the user must solve before auth. Mode is set by the hub admin.
+        - `click`: no SVG, user just confirms they are human.
+        - `puzzle`: SVG math puzzle, user types the answer.
+        - `both`: SVG puzzle shown, click confirmation also required.
+      security: []
+      tags: [Challenge]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChallengePrompt' }
+
+  /challenge/verify:
+    post:
+      summary: Submit challenge answer and receive a one-time token
+      description: |
+        On success returns a `challenge_token` to include in `POST /auth/verify`.
+      security: []
+      tags: [Challenge]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id]
+              properties:
+                challenge_id: { type: string }
+                answer: { type: string, description: "Numeric answer for puzzle mode; omit for click-only" }
+
+  # ── Survey ────────────────────────────────────────────────────────────────
+
+  /survey/current:
+    get:
+      summary: Get the active onboarding survey
+      tags: [Survey]
+
+  /survey/submit:
+    post:
+      summary: Submit survey answers
+      description: |
+        Choice answers auto-apply configured roles. Free-text answers route the
+        user to pending approval. Returns the resulting approval state.
+      tags: [Survey]
+
+  /admin/survey:
+    get:
+      summary: Get full survey config including role mappings (manage_hub)
+      tags: [Survey]
+    put:
+      summary: Create or replace the survey (manage_hub)
+      tags: [Survey]
+
+  /admin/survey/responses:
+    get:
+      summary: List all survey responses (manage_hub)
+      tags: [Survey]
+
+  /admin/survey/responses/{pubkey}:
+    get:
+      summary: Get a specific user's survey response (manage_hub)
+      tags: [Survey]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Bots (admin) ──────────────────────────────────────────────────────────
+
+  /admin/bots:
+    get:
+      summary: List all bots on this hub
+      tags: [Bots]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BotAdminInfo' }
+    post:
+      summary: Create a bot
+      description: |
+        Any authenticated member may create a bot. Returns the raw bot token
+        **once** — store it immediately, it cannot be retrieved again.
+      tags: [Bots]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              properties:
+                display_name: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BotAdminInfo'
+                  - type: object
+                    properties:
+                      token:
+                        type: string
+                        description: "Raw bearer token — shown once only"
+
+  /admin/bots/{pubkey}:
+    get:
+      summary: Get bot detail including registered slash commands
+      tags: [Bots]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BotDetail' }
+    delete:
+      summary: Delete a bot (creator or manage_hub)
+      tags: [Bots]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+
+  /admin/bots/{pubkey}/webhook:
+    put:
+      summary: Set or clear the bot's webhook URL (creator or manage_hub)
+      tags: [Bots]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                webhook_url: { type: string, nullable: true }
+
+  # ── Bots (bot API) ────────────────────────────────────────────────────────
+
+  /bot/commands:
+    put:
+      summary: Register slash commands for this bot
+      description: |
+        Authenticated with `Authorization: Bearer <bot_token>` (not a user session token).
+        Replaces all existing commands for this bot.
+      tags: [Bots]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                commands:
+                  type: array
+                  items:
+                    type: object
+                    required: [command, description]
+                    properties:
+                      command: { type: string, description: "Without slash, e.g. 'weather'" }
+                      description: { type: string }
+
+  /bot/send:
+    post:
+      summary: Send a message as this bot
+      description: Authenticated with bot token.
+      tags: [Bots]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel_id, content]
+              properties:
+                channel_id: { type: string }
+                content: { type: string }
+
+  /bot/poll:
+    get:
+      summary: Poll for undelivered events (slash command invocations)
+      description: Authenticated with bot token.
+      tags: [Bots]
+      parameters:
+        - name: since
+          in: query
+          schema: { type: integer }
+          description: Unix timestamp — return events created after this time
+
+  /bot/events:
+    delete:
+      summary: Acknowledge delivered events
+      description: Authenticated with bot token.
+      tags: [Bots]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids: { type: array, items: { type: string } }
+
+  # ── Identity / Multi-device ───────────────────────────────────────────────
+
+  /identity/{master}/designation:
+    get:
+      summary: Get the canonical display-name designation for a master key
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Set designation
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+
+  /identity/{master}/devices:
+    get:
+      summary: List devices linked to a master key
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Register a new device subkey
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+
+  /identity/{master}/revocations:
+    get:
+      summary: List revoked device keys
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Revoke a device key
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+
+  /identity/{master}/prefs:
+    get:
+      summary: Get cross-device preferences blob
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+    put:
+      summary: Store cross-device preferences blob
+      tags: [Identity]
+      parameters:
+        - name: master
+          in: path
+          required: true
+          schema: { type: string }
+
+  /identity/{pubkey}/dh-key:
+    get:
+      summary: Get DH public key for E2E encryption key exchange
+      tags: [Identity]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+    put:
+      summary: Publish own DH public key
+      tags: [Identity]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+
+  /identity/pairing/offer:
+    post:
+      summary: Create a device-pairing offer
+      tags: [Identity]
+
+  /identity/pairing/claim:
+    post:
+      summary: Claim a pairing offer from a new device
+      tags: [Identity]
+
+  /identity/pairing/complete:
+    post:
+      summary: Complete the pairing handshake
+      tags: [Identity]
+
+  /identity/pairing/status/{token}:
+    get:
+      summary: Poll pairing status
+      tags: [Identity]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Profile ───────────────────────────────────────────────────────────────
+
+  /profile/{pubkey}:
+    get:
+      summary: Get public hub-list profile for a user
+      security: []
+      tags: [Profile]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+    put:
+      summary: Publish own public hub-list profile
+      tags: [Profile]
+      parameters:
+        - name: pubkey
+          in: path
+          required: true
+          schema: { type: string }
+
+  # ── Federation ────────────────────────────────────────────────────────────
+
+  /federation/peers:
+    get:
+      summary: List federated peer hubs
+      tags: [Federation]
+    post:
+      summary: Add a federation peer
+      tags: [Federation]
+
+  /federation/peers/{peer_key}/channels:
+    get:
+      summary: List channels shared by a peer hub
+      tags: [Federation]
+      parameters:
+        - name: peer_key
+          in: path
+          required: true
+          schema: { type: string }
+
+  /federation/channels:
+    get:
+      summary: List all federated channels across all peers
+      tags: [Federation]
+
+  /federation/channels/{fed_channel_id}/messages:
+    get:
+      summary: Fetch messages from a federated channel
+      tags: [Federation]
+      parameters:
+        - name: fed_channel_id
+          in: path
+          required: true
+          schema: { type: string }
+    post:
+      summary: Post a message to a federated channel
+      tags: [Federation]
+      parameters:
+        - name: fed_channel_id
+          in: path
+          required: true
+          schema: { type: string }
+
+  /federation/dm:
+    post:
+      summary: Receive a federated DM from a peer hub
+      description: Called hub-to-hub, authenticated with the sending hub's Ed25519 key.
+      tags: [Federation]
+
+  /federation/alliance-invite:
+    post:
+      summary: Receive an alliance invite push from a peer hub
+      tags: [Federation]
+
+  /admin/directory-sign:
+    post:
+      summary: Sign a directory entry for the hub discovery service
+      tags: [Federation]
+
+  # ── WebSocket ─────────────────────────────────────────────────────────────
+
+  /ws:
+    get:
+      summary: Open a WebSocket connection for real-time events
+      description: |
+        Upgrade to WebSocket. Authenticate by passing the Bearer token as the
+        `token` query parameter: `GET /ws?token=<token>`.
+
+        **Server → client event types** (JSON, field `type`):
+        - `message` — new channel message
+        - `message_edited` — message content updated
+        - `message_deleted` — message removed
+        - `reaction_added` / `reaction_removed`
+        - `user_joined` / `user_left`
+        - `user_updated` — display name or avatar changed
+        - `channel_created` / `channel_updated` / `channel_deleted`
+        - `voice_join` / `voice_leave`
+        - `typing` — user is typing in a channel
+        - `dm_message` — new direct message
+        - `screen_share_started` / `screen_share_chunk` / `screen_share_stopped`
+      tags: [WebSocket]
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+
+tags:
+  - name: Health
+  - name: Auth
+    description: Challenge-response authentication. No Bearer token required.
+  - name: Me
+  - name: Hub
+  - name: Channels
+  - name: Messages
+  - name: DMs
+  - name: Friends
+  - name: Invites
+  - name: Roles
+  - name: Moderation
+  - name: Users
+  - name: Alliances
+  - name: Lobby
+    description: Security-level lobby. Only accessible with scope=lobby.
+  - name: Challenge
+    description: Bot-challenge verification (pre-auth).
+  - name: Survey
+    description: Onboarding role questionnaire.
+  - name: Bots
+    description: Self-service bot creation and bot API.
+  - name: Identity
+    description: Multi-device identity and E2E key exchange.
+  - name: Profile
+  - name: Federation
+    description: Hub-to-hub federation endpoints.
+  - name: WebSocket
