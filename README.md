@@ -1,105 +1,85 @@
-# Voxply
+# Voxply-server
 
-A decentralized platform where players can hang out, talk, and play
-together. Voice chat, text messaging, federated alliances of hubs, and
-community-built games — all keypair-based identity, no central servers.
+Hub server for the [Voxply](https://github.com/YOUR_ORG/Voxply) platform.
+Handles authentication, channels, messaging, federation, voice relay,
+alliances, bots, security lobby, and all hub-side logic.
 
-## Features
+Part of the Voxply project — see the
+[docs repo](https://github.com/YOUR_ORG/Voxply) for architecture,
+API spec, and roadmap.
 
-- **Channels** — every channel is **unified text + voice**: chat
-  history and voice in the same room. Categories nest channels (and
-  other categories). Drag-drop reorder, collapse/pin, search, markdown,
-  code blocks, attachments (3 MB), reactions, replies, mentions, /me
-  actions, edit/delete.
-- **Voice** — Opus over UDP with RNNoise denoise, voice activity
-  detection, push-to-talk, self-mute / self-deafen.
-- **Direct messages** — federated outbox with retry, attachments,
-  typing indicator, unread tracking, sort by activity.
-- **Alliances** — multi-hub groups. Hubs share channels, messages, and
-  reactions across the alliance via federation.
-- **Hub federation** — independent hubs peer over HTTPS + WebSocket.
-- **Identity** — Ed25519 keypair, 24-word BIP39 recovery phrase, no
-  accounts, no passwords.
-- **Roles & moderation** — custom roles with priority and permissions,
-  ban / mute / timeout / kick, channel ban, voice mute, talk power, hub
-  approval queue.
-- **Notifications** — three-state per scope (all / mentions only /
-  silent), system tray badge, OS notifications, mention sound.
-- **Themes** — Calm (default), Classic, Linear, Light.
+## Technologies
 
-## Architecture
+- **Rust** — memory-safe, async, zero-cost abstractions
+- **Axum 0.8** — HTTP + WebSocket server framework
+- **SQLite** via sqlx — embedded database, no separate process
+- **tokio** — async runtime
+- **Ed25519** (voxply-identity) — keypair-based identity, no accounts
+- **SHA-256 PoW** — proof-of-work security levels
+- **UDP** — raw voice packet relay (codec handled client-side)
+- **reqwest** — outbound HTTP for federation
+
+## Repository structure
 
 ```
-server/
-├── voxply-hub/          Hub server (axum + SQLite + WebSocket + UDP voice)
-└── voxply-seed/         Discovery scaffold (not in active use)
-
-client/
-└── voxply-desktop/      Tauri + React desktop client
-
-shared/
-├── voxply-identity/     Ed25519 keypairs, signing, recovery phrases
-└── voxply-voice/        Audio pipeline (cpal + Opus + RNNoise)
+voxply-hub/          Main hub server binary + library
+  src/
+    auth/            Challenge-response auth, session tokens
+    routes/          All HTTP handlers (channels, messages, DMs, bots, …)
+    federation/      Hub-to-hub federation client + handlers
+    db/              SQLite migrations
+voxply-seed/         Seed / discovery scaffold
+voxply-identity/     Ed25519 keypairs, PoW, BIP39 recovery, wire types
+openapi.yaml         Full API specification (OpenAPI 3.0)
+docs/                Architecture docs, design decisions, threat model
 ```
 
 ## Quick start
 
-### Hub server
-
 ```bash
 cargo run -p voxply-hub
-# Listens on http://0.0.0.0:3000 (HTTP) and 0.0.0.0:3001 (voice UDP).
-# Override with VOXPLY_HTTP_PORT / VOXPLY_VOICE_UDP_PORT.
-# Set VOXPLY_TLS_CERT and VOXPLY_TLS_KEY for HTTPS.
+# HTTP on 0.0.0.0:3000  |  Voice UDP on 0.0.0.0:3001
+# VOXPLY_HTTP_PORT / VOXPLY_VOICE_UDP_PORT to override
+# VOXPLY_TLS_CERT + VOXPLY_TLS_KEY for HTTPS
 ```
 
-For a real production deployment (systemd unit, TLS, backups, upgrades),
-see [`docs/hosting.md`](docs/hosting.md).
+For production deployment (systemd, TLS, backups, upgrades) see
+[`docs/hosting.md`](docs/hosting.md).
 
-### Desktop client
+## Building & testing
 
 ```bash
-cd client/voxply-desktop
-npm install
-npm run tauri dev
+cargo check --workspace          # fast type check
+cargo test --workspace           # run all integration tests
+cargo build --release -p voxply-hub   # release binary
 ```
 
-The window opens with an "Add a hub" prompt; paste your hub URL
-(`http://localhost:3000` for a local dev hub) to connect.
-
-## Building
+Or using Docker:
 
 ```bash
-cargo build                       # all Rust crates
-cargo test                        # hub + shared crate tests
-cd client/voxply-desktop && npm run tauri build   # desktop release
+docker compose up --build        # see voxply-hub/docker-compose.yml
 ```
 
-## Documentation
+## API
 
-- [`docs/`](docs/README.md) — architecture, federation, identity,
-  alliances, voice, data model, client structure, decisions, threat
-  model, and glossary. Start at [`docs/README.md`](docs/README.md).
-- [`ROADMAP.md`](ROADMAP.md) — what's next, known issues, undesigned
-  wishlist, and explicit "won't do" decisions.
+The complete API reference is in [`openapi.yaml`](openapi.yaml) —
+every endpoint, request/response shape, auth flow, and PoW algorithm
+documented in OpenAPI 3.0. Implement a client in any language against
+this spec.
 
 ## Built with AI assistance
 
 This project was built with substantial help from
-[Claude](https://claude.ai) (Anthropic's AI assistant). I direct the
-product, architectural choices, and tradeoffs; Claude drafts most of
-the code, tests, and documentation, which I then review and accept,
-adjust, or rewrite.
+[Claude](https://claude.ai) (Anthropic's AI assistant). The product
+owner directs architecture, features, and tradeoffs; Claude drafts
+most of the code, tests, and documentation, which is then reviewed,
+adjusted, and accepted.
 
 Calling this out for transparency — it's not a fully hand-written
-project, and pretending otherwise wouldn't be honest.
-
-The wiki at [`docs/`](docs/README.md) is intentionally LLM-friendly
-(file:line pointers, navigable index, "why" over "what") so Claude
-stays useful as the codebase grows.
+codebase, and pretending otherwise wouldn't be honest.
 
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE). Network use of a
-modified version requires offering the corresponding source to those
-users — important for a federated platform like this.
+modified version requires offering the corresponding source to users —
+important for a federated platform.
