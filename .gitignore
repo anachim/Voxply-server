@@ -1,4 +1,6 @@
 /target
+.claude/
+.obsidian/
 **/*.db
 **/*.db-shm
 **/*.db-wal
