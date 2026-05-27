@@ -38,6 +38,7 @@ async fn setup() -> TestServer {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app = server::create_router(state);
@@ -335,6 +336,7 @@ async fn spawn_real_hub() -> (String, Arc<AppState>) {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app = server::create_router(state.clone());
@@ -392,6 +394,13 @@ async fn ws_voice_join_and_recv(
     let url = format!("{ws_url}/ws?token={token}");
     let (ws_stream, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     let (mut tx, mut rx) = ws_stream.split();
+
+    // Consume the `hello` frame the hub sends on connect.
+    let hello_frame = rx.next().await.unwrap().unwrap();
+    let WsMessage::Text(hello_text) = hello_frame else { panic!("expected hello text frame") };
+    let hello: serde_json::Value = serde_json::from_str(&hello_text).unwrap();
+    assert_eq!(hello["type"], "hello", "first frame should be hello");
+
     tx.send(WsMessage::Text(
         json!({ "type": "voice_join", "channel_id": channel_id, "udp_port": 12345 })
             .to_string()

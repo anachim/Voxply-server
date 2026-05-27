@@ -46,6 +46,7 @@ async fn setup_with_pool() -> (TestServer, sqlx::SqlitePool) {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app = server::create_router(state);
@@ -246,6 +247,7 @@ async fn start_real_hub(name: &str) -> String {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app = server::create_router(state);
@@ -321,6 +323,7 @@ async fn start_real_hub_with_state(name: &str) -> (String, Arc<AppState>) {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app = server::create_router(state.clone());
@@ -475,6 +478,7 @@ async fn dm_retries_when_recipient_hub_comes_online() {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
     let app_b = server::create_router(hub_b_state.clone());

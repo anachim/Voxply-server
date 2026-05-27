@@ -7,6 +7,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, RwLock};
 use voxply_hub::db;
+use voxply_hub::bots::token_expiry;
 use voxply_hub::dm_worker;
 use voxply_hub::federation::client::FederationClient;
 use voxply_hub::server;
@@ -100,6 +101,7 @@ async fn main() -> Result<()> {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx,
+        bot_sessions: RwLock::new(HashMap::new()),
     });
 
     // Bind voice UDP socket and start forwarding task
@@ -138,6 +140,9 @@ async fn main() -> Result<()> {
 
     // Retry undelivered federated DMs in the background.
     dm_worker::spawn(state.clone());
+
+    // Warn bots about expiring tokens.
+    token_expiry::spawn(state.clone());
 
     let app = server::create_router(state);
     let addr: std::net::SocketAddr = format!("0.0.0.0:{http_port}").parse()?;

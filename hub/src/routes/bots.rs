@@ -14,6 +14,36 @@ use crate::routes::bot_models::{BotCommandDef, BotMeta, BotSubscription};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
+// Audit log route types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AuditLogQuery {
+    pub event_type: Option<String>,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AuditLogEntry {
+    pub seq: i64,
+    pub event_type: String,
+    pub at: i64,
+    pub actor_pubkey: Option<String>,
+    pub target_pubkey: Option<String>,
+    pub channel_id: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Serialize)]
+pub struct AuditLogResponse {
+    pub entries: Vec<AuditLogEntry>,
+    pub next_cursor: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -1096,4 +1126,99 @@ pub async fn ext_update_bot_subscriptions(
     }
 
     Ok(Json(SetSubscriptionsResponse { count }))
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/audit-log
+// ---------------------------------------------------------------------------
+
+/// Cursor-paginated view of `hub_audit_log`. Admin only.
+pub async fn admin_audit_log(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(params): Query<AuditLogQuery>,
+) -> Result<Json<AuditLogResponse>, (StatusCode, String)> {
+    let perms = permissions::user_permissions(&state.db, &user.public_key).await?;
+    perms.require(permissions::ADMIN)?;
+
+    let limit = params.limit.unwrap_or(50).min(200).max(1);
+    // We fetch limit+1 to detect whether there's a next page.
+    let fetch_limit = limit + 1;
+
+    #[derive(sqlx::FromRow)]
+    struct AuditRow {
+        seq: i64,
+        event_type: String,
+        at: i64,
+        actor_pubkey: Option<String>,
+        target_pubkey: Option<String>,
+        channel_id: Option<String>,
+        payload_json: String,
+    }
+
+    // Build query dynamically from optional filters.
+    // SQLite doesn't support named params easily with sqlx, so we use a flag
+    // approach: always bind all params, use 0/MAX for disabled ranges.
+    let cursor_seq = params.cursor.unwrap_or(0);
+    let since = params.since.unwrap_or(0);
+    let until = params.until.unwrap_or(i64::MAX);
+    let event_type_filter = params.event_type.as_deref().unwrap_or("");
+
+    let rows: Vec<AuditRow> = if event_type_filter.is_empty() {
+        sqlx::query_as::<_, AuditRow>(
+            "SELECT seq, event_type, at, actor_pubkey, target_pubkey, channel_id, payload_json
+             FROM hub_audit_log
+             WHERE seq > ? AND at >= ? AND at <= ?
+             ORDER BY seq ASC
+             LIMIT ?",
+        )
+        .bind(cursor_seq)
+        .bind(since)
+        .bind(until)
+        .bind(fetch_limit)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<_, AuditRow>(
+            "SELECT seq, event_type, at, actor_pubkey, target_pubkey, channel_id, payload_json
+             FROM hub_audit_log
+             WHERE seq > ? AND at >= ? AND at <= ? AND event_type = ?
+             ORDER BY seq ASC
+             LIMIT ?",
+        )
+        .bind(cursor_seq)
+        .bind(since)
+        .bind(until)
+        .bind(event_type_filter)
+        .bind(fetch_limit)
+        .fetch_all(&state.db)
+        .await
+    }
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let entries: Vec<AuditLogEntry> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|r| AuditLogEntry {
+            seq: r.seq,
+            event_type: r.event_type,
+            at: r.at,
+            actor_pubkey: r.actor_pubkey,
+            target_pubkey: r.target_pubkey,
+            channel_id: r.channel_id,
+            payload: serde_json::from_str(&r.payload_json).unwrap_or(serde_json::Value::Null),
+        })
+        .collect();
+
+    let next_cursor = if has_more {
+        entries.last().map(|e| e.seq)
+    } else {
+        None
+    };
+
+    Ok(Json(AuditLogResponse {
+        entries,
+        next_cursor,
+    }))
 }

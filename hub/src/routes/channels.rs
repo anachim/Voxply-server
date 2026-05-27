@@ -185,22 +185,39 @@ pub async fn create_channel(
         }
     })?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(ChannelResponse {
-            id,
-            name: req.name,
-            created_by: user.public_key,
-            parent_id: req.parent_id,
-            is_category: req.is_category,
-            display_order: next_order,
-            description: req.description,
-            icon: None,
-            color: None,
-            custom_icon_svg: None,
-            created_at: now,
-        }),
-    ))
+    let resp = ChannelResponse {
+        id: id.clone(),
+        name: req.name.clone(),
+        created_by: user.public_key.clone(),
+        parent_id: req.parent_id.clone(),
+        is_category: req.is_category,
+        display_order: next_order,
+        description: req.description.clone(),
+        icon: None,
+        color: None,
+        custom_icon_svg: None,
+        created_at: now,
+    };
+
+    // Publish channel.created audit event.
+    {
+        let state_c = state.clone();
+        let ch_id = id.clone();
+        let ch_name = req.name.clone();
+        let creator = user.public_key.clone();
+        tokio::spawn(async move {
+            crate::bots::events::publish_hub_event(
+                &state_c,
+                "channel.created",
+                Some(&creator),
+                None,
+                Some(&ch_id),
+                serde_json::json!({ "channel_id": ch_id, "name": ch_name }),
+            ).await;
+        });
+    }
+
+    Ok((StatusCode::CREATED, Json(resp)))
 }
 
 pub async fn update_channel(
@@ -493,6 +510,23 @@ pub async fn delete_channel(
         .execute(&state.db)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
+
+    // Publish channel.deleted audit event.
+    {
+        let state_c = state.clone();
+        let ch_id = channel_id.clone();
+        let actor = user.public_key.clone();
+        tokio::spawn(async move {
+            crate::bots::events::publish_hub_event(
+                &state_c,
+                "channel.deleted",
+                Some(&actor),
+                None,
+                Some(&ch_id),
+                serde_json::json!({ "channel_id": ch_id }),
+            ).await;
+        });
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -190,9 +190,33 @@ pub async fn send_message(
     };
 
     let _ = state.chat_tx.send(ChatEvent::New {
-        channel_id,
+        channel_id: channel_id.clone(),
         message: message.clone(),
     });
+
+    // Publish message.created audit event for bot subscriptions.
+    {
+        let state_c = state.clone();
+        let ch = channel_id.clone();
+        let msg_c = message.clone();
+        tokio::spawn(async move {
+            crate::bots::events::publish_hub_event(
+                &state_c,
+                "message.created",
+                Some(&msg_c.sender),
+                None,
+                Some(&ch),
+                serde_json::json!({
+                    "message_id": msg_c.id,
+                    "content": msg_c.content,
+                    "sender": msg_c.sender,
+                    "sender_name": msg_c.sender_name,
+                    "created_at": msg_c.created_at,
+                    "attachments": msg_c.attachments,
+                }),
+            ).await;
+        });
+    }
 
     Ok((StatusCode::CREATED, Json(message)))
 }

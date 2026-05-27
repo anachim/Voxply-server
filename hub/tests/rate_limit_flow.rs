@@ -34,6 +34,7 @@ async fn start_real_hub() -> String {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(16).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
 

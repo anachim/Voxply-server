@@ -235,6 +235,17 @@ pub enum WsClientMessage {
         channel_id: String,
         stream_id: String,
     },
+    /// Bot sends this after connecting to request replay of missed events.
+    #[serde(rename = "resume")]
+    Resume { since_seq: i64 },
+    /// User or bot interaction with a message component (button, select).
+    #[serde(rename = "component_interaction")]
+    ComponentInteraction {
+        message_id: String,
+        custom_id: String,
+        #[serde(default)]
+        values: Vec<String>,
+    },
 }
 
 #[derive(Serialize, Clone)]

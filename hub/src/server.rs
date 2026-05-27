@@ -83,6 +83,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/admin/bots", get(routes::bots::admin_list_bots).post(routes::bots::admin_create_bot))
         .route("/admin/bots/{pubkey}", get(routes::bots::admin_get_bot).delete(routes::bots::admin_delete_bot))
         .route("/admin/bots/{pubkey}/webhook", put(routes::bots::admin_set_webhook))
+        .route("/admin/audit-log", get(routes::bots::admin_audit_log))
         // ---- Bot API (token auth, internal service accounts) ----
         .route("/bot/commands", put(routes::bots::bot_set_commands))
         .route("/bot/send", post(routes::bots::bot_send_message))

@@ -1,17 +1,27 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::extract::ws::{Message, WebSocket};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
 
 use crate::routes::chat_models::{
     VoiceParticipantInfo, WsClientMessage, WsParams, WsServerMessage,
 };
 use crate::state::{ActiveShare, AppState, ScreenChunkEvent};
+
+// ---------------------------------------------------------------------------
+// Component interaction rate-limit store (in-memory, no external dep).
+// Key: (user_pubkey, custom_id); Value: last interaction instant.
+// ---------------------------------------------------------------------------
+tokio::task_local! {
+    // Not used across tasks; the HashMap is held per WS connection below.
+}
 
 pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
@@ -40,31 +50,51 @@ pub async fn ws_handler(
         return Err((StatusCode::UNAUTHORIZED, "Key has been revoked".to_string()));
     }
 
-    tracing::info!("WebSocket connected: {}", &public_key[..16]);
+    tracing::info!("WebSocket connected: {}", &public_key[..16.min(public_key.len())]);
 
     Ok(ws.on_upgrade(move |socket| handle_socket(socket, state, public_key)))
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: String) {
-    // Track online status
+    // Determine whether this connection belongs to a bot.
+    let is_bot: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT is_bot FROM users WHERE public_key = ?",
+    )
+    .bind(&public_key)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(0)
+        != 0;
+
     state.online_users.write().await.insert(public_key.clone());
 
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // For bots we use an mpsc channel so that the events module can push
+    // hub_event frames without going through the broadcast flood.
+    // For regular users we keep the existing broadcast approach.
+    let (bot_tx, mut bot_rx): (mpsc::Sender<String>, mpsc::Receiver<String>) =
+        mpsc::channel(256);
+
+    if is_bot {
+        state.bot_sessions.write().await.insert(public_key.clone(), bot_tx.clone());
+    }
+
     let mut chat_rx = state.chat_tx.subscribe();
-    // Record the time we subscribed to the broadcast channel. The auto-subscribe
-    // push below only sends ScreenShareStarted for streams whose started_at
-    // predates this instant — streams started after this instant arrive via
-    // the broadcast and don't need an explicit push.
     let chat_rx_since = std::time::Instant::now();
     let mut dm_rx = state.dm_tx.subscribe();
     let mut voice_rx = state.voice_event_tx.subscribe();
     let mut screen_share_rx = state.screen_share_tx.subscribe();
     let mut voice_channel: Option<String> = None;
-    // When Some, the next binary WS frame is a screen-share chunk for this stream.
-    // (channel_id, stream_id, seq, is_init)
     let mut pending_chunk: Option<(String, String, u32, bool)> = None;
 
-    // Load this user's conversation IDs for DM filtering
+    // Per-connection component interaction rate-limit map.
+    // Key: (user_pubkey, custom_id). Value: last interaction instant.
+    let mut component_rate_limit: HashMap<(String, String), Instant> = HashMap::new();
+
+    // Load DM conversation memberships.
     let my_conversations: HashSet<String> = sqlx::query_scalar::<_, String>(
         "SELECT conversation_id FROM conversation_members WHERE public_key = ?",
     )
@@ -75,8 +105,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
     .into_iter()
     .collect();
 
-    // Auto-subscribe to all channels the user is not banned from.
-    // Categories (is_category = 1) carry no messages so skip them.
+    // Auto-subscribe to non-banned channels.
     let mut subscribed: HashSet<String> = sqlx::query_scalar::<_, String>(
         "SELECT id FROM channels
          WHERE is_category = 0
@@ -91,10 +120,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
     .into_iter()
     .collect();
 
-    // Push any in-progress screen shares to this client immediately at connect
-    // so they don't miss a share that started before they subscribed to the
-    // broadcast. Shares started after chat_rx_since will arrive via the
-    // broadcast channel and must not be pushed here (would duplicate them).
+    // Send `hello` with live_seq.
+    {
+        let live_seq = crate::bots::events::current_seq(&state).await;
+        let hello = serde_json::json!({
+            "type": "hello",
+            "live_seq": live_seq,
+        });
+        let _ = ws_tx.send(Message::Text(hello.to_string().into())).await;
+    }
+
+    // Push in-progress screen shares to this client.
     {
         let shares = state.screen_shares.read().await;
         for channel_id in &subscribed {
@@ -130,14 +166,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
         }
     }
 
+    // Replay buffer: accumulates live events during a bot replay pass.
+    let mut replay_buffer: Vec<String> = Vec::new();
+    #[allow(unused_assignments)]
+    let mut is_replaying = false;
+
     loop {
         tokio::select! {
             result = chat_rx.recv() => {
                 match result {
                     Ok(event) => {
                         if subscribed.contains(event.channel_id()) {
-                            // Don't echo typing events back to the originator -- they
-                            // already know they're typing.
                             if let crate::routes::chat_models::ChatEvent::Typing {
                                 public_key: sender_key, ..
                             } = &event
@@ -146,10 +185,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                     continue;
                                 }
                             }
-                            // Ephemeral message filtering: if visible_to_pubkey is set,
-                            // only deliver to the named recipient. Other WS clients skip it.
-                            // This is defence-in-depth — the message content is innocuous
-                            // (an error or bot reply) but we keep it invisible to others.
                             if let crate::routes::chat_models::ChatEvent::New { message: ref m, .. } = &event {
                                 if let Some(ref vtp) = m.visible_to_pubkey {
                                     if vtp != &public_key {
@@ -185,7 +220,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 },
                             };
                             let json = serde_json::to_string(&ws_msg).unwrap();
-                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            if is_replaying {
+                                replay_buffer.push(json);
+                            } else if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                 break;
                             }
                         }
@@ -197,20 +234,30 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                 }
             }
 
+            // Bot-targeted push messages (hub_event, token_expiring_soon, etc.)
+            bot_msg = bot_rx.recv() => {
+                match bot_msg {
+                    Some(json) => {
+                        if is_replaying {
+                            replay_buffer.push(json);
+                        } else if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(WsClientMessage::Subscribe { channel_id }) => {
                                 let newly_subscribed = subscribed.insert(channel_id.clone());
-                                // Push active screen shares only for channels not already in
-                                // the subscribed set. Auto-subscribed channels are handled at
-                                // connect time above; re-subscribing would produce duplicates.
                                 if !newly_subscribed { continue; }
                                 let shares = state.screen_shares.read().await;
                                 if let Some(active) = shares.get(&channel_id) {
                                     for (stream_id, meta) in &active.streams {
-                                        // Send ScreenShareStarted so the client knows the stream exists.
                                         let started = WsServerMessage::ScreenShareStarted {
                                             channel_id: channel_id.clone(),
                                             stream_id: stream_id.clone(),
@@ -223,8 +270,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                             break;
                                         }
-                                        // If we have a cached init chunk, send it as a
-                                        // synthetic ScreenShareChunkOut + binary frame.
                                         if let Some(init_bytes) = &meta.init_chunk {
                                             let chunk_envelope = WsServerMessage::ScreenShareChunkOut {
                                                 channel_id: channel_id.clone(),
@@ -252,12 +297,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 subscribed.remove(&channel_id);
                             }
                             Ok(WsClientMessage::VoiceJoin { channel_id, udp_port }) => {
-                                // Moderation gates before adding the user to
-                                // the voice channel:
-                                //   1. Voice mute applies hub-wide.
-                                //   2. min_talk_power on the channel requires
-                                //      the user's highest role priority to be
-                                //      at least that level.
                                 let is_muted = crate::routes::moderation::is_voice_muted(
                                     &state.db, &public_key,
                                 )
@@ -311,7 +350,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 let client_addr: SocketAddr =
                                     format!("127.0.0.1:{udp_port}").parse().unwrap();
 
-                                // Register participant
                                 state.voice_channels.write().await
                                     .entry(channel_id.clone())
                                     .or_default()
@@ -319,10 +357,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
 
                                 voice_channel = Some(channel_id.clone());
 
-                                // Get participant list
                                 let participants = get_voice_participants(&state, &channel_id).await;
 
-                                // Send confirmation to this client
                                 let msg = WsServerMessage::VoiceJoined {
                                     channel_id: channel_id.clone(),
                                     hub_udp_port: state.voice_udp_port,
@@ -331,7 +367,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 let json = serde_json::to_string(&msg).unwrap();
                                 let _ = ws_tx.send(Message::Text(json.into())).await;
 
-                                // Get display name for broadcast
                                 let display_name: Option<String> = sqlx::query_scalar(
                                     "SELECT display_name FROM users WHERE public_key = ?",
                                 )
@@ -341,27 +376,59 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 .ok()
                                 .flatten();
 
-                                // Broadcast to others via chat broadcast (they'll filter)
                                 let _ = state.voice_event_tx.send((
-                                    channel_id,
+                                    channel_id.clone(),
                                     WsServerMessage::VoiceParticipantJoined {
                                         channel_id: voice_channel.clone().unwrap(),
                                         participant: VoiceParticipantInfo {
                                             public_key: public_key.clone(),
-                                            display_name,
+                                            display_name: display_name.clone(),
                                         },
                                     },
                                 ));
 
-                                tracing::info!("Voice join: {} in channel", &public_key[..16]);
+                                // Publish member.joined audit event.
+                                {
+                                    let state_c = state.clone();
+                                    let pk = public_key.clone();
+                                    let ch = channel_id.clone();
+                                    let dn = display_name;
+                                    tokio::spawn(async move {
+                                        crate::bots::events::publish_hub_event(
+                                            &state_c,
+                                            "member.joined",
+                                            Some(&pk),
+                                            None,
+                                            Some(&ch),
+                                            serde_json::json!({ "display_name": dn }),
+                                        ).await;
+                                    });
+                                }
+
+                                tracing::info!("Voice join: {} in channel", &public_key[..16.min(public_key.len())]);
                             }
                             Ok(WsClientMessage::VoiceLeave { channel_id }) => {
                                 leave_voice(&state, &public_key, &channel_id).await;
                                 voice_channel = None;
-                                tracing::info!("Voice leave: {}", &public_key[..16]);
+                                // Publish member.left audit event.
+                                {
+                                    let state_c = state.clone();
+                                    let pk = public_key.clone();
+                                    let ch = channel_id.clone();
+                                    tokio::spawn(async move {
+                                        crate::bots::events::publish_hub_event(
+                                            &state_c,
+                                            "member.left",
+                                            Some(&pk),
+                                            None,
+                                            Some(&ch),
+                                            serde_json::json!({}),
+                                        ).await;
+                                    });
+                                }
+                                tracing::info!("Voice leave: {}", &public_key[..16.min(public_key.len())]);
                             }
                             Ok(WsClientMessage::VoiceSpeaking { channel_id, speaking }) => {
-                                // Broadcast to other participants of this voice channel
                                 let _ = state.voice_event_tx.send((
                                     channel_id.clone(),
                                     WsServerMessage::VoiceParticipantSpeaking {
@@ -372,8 +439,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 ));
                             }
                             Ok(WsClientMessage::Typing { channel_id, typing }) => {
-                                // Look up display name once -- the broadcast can carry
-                                // it so receivers don't need an extra users map lookup.
                                 let display_name: Option<String> = sqlx::query_scalar(
                                     "SELECT display_name FROM users WHERE public_key = ?",
                                 )
@@ -392,9 +457,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 );
                             }
                             Ok(WsClientMessage::DmTyping { conversation_id, typing }) => {
-                                // Same shape but routed through the DM
-                                // broadcast so it filters to conversation
-                                // members on the relay side.
                                 let display_name: Option<String> = sqlx::query_scalar(
                                     "SELECT display_name FROM users WHERE public_key = ?",
                                 )
@@ -412,8 +474,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                             }
 
                             Ok(WsClientMessage::ScreenShareStart { channel_id, stream_id, kind, mime, has_audio }) => {
-                                // At-most-one-sharer-per-channel: reject if a *different* user
-                                // is already sharing. The same sharer may add a second stream.
                                 {
                                     let shares = state.screen_shares.read().await;
                                     if let Some(active) = shares.get(&channel_id) {
@@ -456,7 +516,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                             }
 
                             Ok(WsClientMessage::ScreenShareChunk { channel_id, stream_id, seq, is_init }) => {
-                                // Store metadata; the next binary frame carries the actual data.
                                 pending_chunk = Some((channel_id, stream_id, seq, is_init));
                             }
 
@@ -477,13 +536,107 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 });
                             }
 
+                            Ok(WsClientMessage::Resume { since_seq }) => {
+                                // Only bots can resume (they're the only consumers of hub_event).
+                                if !is_bot {
+                                    continue;
+                                }
+
+                                is_replaying = true;
+                                let _ = is_replaying; // suppress lint: read across tokio::select! arms
+
+                                let live_seq = crate::bots::events::current_seq(&state).await;
+
+                                // Clone the bot_tx so replay_events_for_bot can push directly.
+                                let replay_tx = bot_tx.clone();
+                                let result = crate::bots::events::replay_events_for_bot(
+                                    &state,
+                                    &public_key,
+                                    since_seq,
+                                    &replay_tx,
+                                ).await;
+
+                                is_replaying = false;
+
+                                match result {
+                                    crate::bots::events::ReplayResult::Unavailable {
+                                        earliest_seq,
+                                        earliest_at,
+                                    } => {
+                                        let msg = serde_json::json!({
+                                            "type": "replay_unavailable",
+                                            "earliest_seq": earliest_seq,
+                                            "earliest_at": earliest_at,
+                                        });
+                                        if ws_tx.send(Message::Text(msg.to_string().into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    crate::bots::events::ReplayResult::Complete { replayed } => {
+                                        let msg = serde_json::json!({
+                                            "type": "replay_complete",
+                                            "replayed": replayed,
+                                            "live_from_seq": live_seq,
+                                        });
+                                        if ws_tx.send(Message::Text(msg.to_string().into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Flush buffered live events that arrived during replay.
+                                for buffered in replay_buffer.drain(..) {
+                                    if ws_tx.send(Message::Text(buffered.into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            Ok(WsClientMessage::ComponentInteraction {
+                                message_id,
+                                custom_id,
+                                values,
+                            }) => {
+                                // Rate-limit: 1 interaction per (user, custom_id) per 3 seconds.
+                                let rl_key = (public_key.clone(), custom_id.clone());
+                                let now_inst = Instant::now();
+                                if let Some(last) = component_rate_limit.get(&rl_key) {
+                                    if now_inst.duration_since(*last) < Duration::from_secs(3) {
+                                        let err = WsServerMessage::Error {
+                                            context: "component_interaction".to_string(),
+                                            message: "Please wait before interacting again.".to_string(),
+                                        };
+                                        let _ = ws_tx
+                                            .send(Message::Text(serde_json::to_string(&err).unwrap().into()))
+                                            .await;
+                                        continue;
+                                    }
+                                }
+                                component_rate_limit.insert(rl_key, now_inst);
+                                // Opportunistic cleanup so the map doesn't grow forever.
+                                if component_rate_limit.len() > 500 {
+                                    component_rate_limit.retain(|_, t| now_inst.duration_since(*t) < Duration::from_secs(60));
+                                }
+
+                                let state_c = state.clone();
+                                let pk = public_key.clone();
+                                tokio::spawn(async move {
+                                    crate::bots::dispatch::dispatch_component(
+                                        &state_c,
+                                        &message_id,
+                                        &custom_id,
+                                        &values,
+                                        &pk,
+                                    ).await;
+                                });
+                            }
+
                             Err(_) => {}
                         }
                     }
                     Some(Ok(Message::Binary(data))) => {
                         if let Some((ch_id, st_id, seq, is_init)) = pending_chunk.take() {
                             let chunk_bytes = bytes::Bytes::from(data.to_vec());
-                            // Cache init chunk so late joiners can catch up.
                             if is_init {
                                 let mut shares = state.screen_shares.write().await;
                                 if let Some(active) = shares.get_mut(&ch_id) {
@@ -507,11 +660,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                 }
             }
 
-            // Voice event relay — only forward to clients currently in that voice channel
             voice_result = voice_rx.recv() => {
                 if let Ok((channel_id, msg)) = voice_result {
                     if voice_channel.as_deref() == Some(channel_id.as_str()) {
-                        // Don't echo our own speaking state back to ourselves
                         let is_self = match &msg {
                             WsServerMessage::VoiceParticipantSpeaking { public_key: pk, .. } => pk == &public_key,
                             WsServerMessage::VoiceParticipantJoined { participant, .. } => participant.public_key == public_key,
@@ -528,12 +679,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                 }
             }
 
-            // DM relay
             dm_result = dm_rx.recv() => {
                 if let Ok(dm) = dm_result {
-                    // Only relay to members of this conversation, and never
-                    // back to the sender (they already know they sent /
-                    // typed it).
                     if dm.sender() == public_key
                         || !my_conversations.contains(dm.conversation_id())
                     {
@@ -558,11 +705,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                 }
             }
 
-            // Screen-share chunk relay
             chunk_result = screen_share_rx.recv() => {
                 match chunk_result {
                     Ok(ev) => {
-                        // Forward only to subscribers of the channel, never back to the sharer.
                         if ev.sharer_pubkey != public_key
                             && subscribed.contains(&ev.channel_id)
                         {
@@ -591,11 +736,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
         }
     }
 
-    // Clean up on disconnect
+    // Clean up on disconnect.
     if let Some(ch_id) = voice_channel {
         leave_voice(&state, &public_key, &ch_id).await;
     }
-    // Remove any screen shares owned by this connection.
     {
         let mut shares = state.screen_shares.write().await;
         for active in shares.values_mut() {
@@ -603,9 +747,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
         }
         shares.retain(|_, active| !active.streams.is_empty());
     }
+    if is_bot {
+        state.bot_sessions.write().await.remove(&public_key);
+    }
     state.online_users.write().await.remove(&public_key);
 
-    tracing::info!("WebSocket disconnected: {}", &public_key[..16]);
+    tracing::info!("WebSocket disconnected: {}", &public_key[..16.min(public_key.len())]);
 }
 
 async fn leave_voice(state: &AppState, public_key: &str, channel_id: &str) {

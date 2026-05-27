@@ -39,6 +39,7 @@ async fn start_hub() -> (String, Arc<AppState>) {
         online_users: RwLock::new(std::collections::HashSet::new()),
         screen_shares: RwLock::new(HashMap::new()),
         screen_share_tx: broadcast::channel(256).0,
+        bot_sessions: RwLock::new(std::collections::HashMap::new()),
         http_client: reqwest::Client::new(),
     });
 
@@ -151,7 +152,12 @@ async fn next_text(
             .unwrap()
             .unwrap();
         if let TsMessage::Text(t) = msg {
-            return serde_json::from_str(&t).unwrap();
+            let v: Value = serde_json::from_str(&t).unwrap();
+            // Skip the hello frame the hub sends on connect.
+            if v["type"] == "hello" {
+                continue;
+            }
+            return v;
         }
     }
 }

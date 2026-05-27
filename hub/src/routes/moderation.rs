@@ -59,6 +59,24 @@ pub async fn ban_user(
 
     tracing::info!("Banned user: {}", &req.target_public_key[..16]);
 
+    // Publish member.banned audit event.
+    {
+        let state_c = state.clone();
+        let actor = user.public_key.clone();
+        let target = req.target_public_key.clone();
+        let reason = req.reason.clone();
+        tokio::spawn(async move {
+            crate::bots::events::publish_hub_event(
+                &state_c,
+                "member.banned",
+                Some(&actor),
+                Some(&target),
+                None,
+                serde_json::json!({ "reason": reason }),
+            ).await;
+        });
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(BanResponse {
@@ -253,6 +271,23 @@ pub async fn kick_user(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
     tracing::info!("Kicked user: {}", &req.target_public_key[..16]);
+
+    // Publish member.kicked audit event.
+    {
+        let state_c = state.clone();
+        let actor = user.public_key.clone();
+        let target = req.target_public_key.clone();
+        tokio::spawn(async move {
+            crate::bots::events::publish_hub_event(
+                &state_c,
+                "member.kicked",
+                Some(&actor),
+                Some(&target),
+                None,
+                serde_json::json!({}),
+            ).await;
+        });
+    }
 
     Ok(StatusCode::OK)
 }

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use voxply_identity::Identity;
 
 use crate::federation::client::FederationClient;
@@ -99,6 +99,11 @@ pub struct AppState {
     pub screen_shares: RwLock<HashMap<String, ActiveShare>>,
     /// Broadcast channel carrying binary chunk events to all WS connections.
     pub screen_share_tx: broadcast::Sender<ScreenChunkEvent>,
+    /// Active bot WS sessions: bot_pubkey → mpsc sender for pre-serialised
+    /// JSON text frames. Bots use a separate channel from the regular WS
+    /// broadcast so we can push targeted hub_event messages without looping
+    /// through every connected client.
+    pub bot_sessions: RwLock<HashMap<String, mpsc::Sender<String>>>,
 }
 
 pub struct PendingChallenge {

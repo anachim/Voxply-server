@@ -980,6 +980,27 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Add expires_at and expiry_warned_at to sessions for token-expiry push.
+    // These columns are optional: NULL expires_at = session never expires.
+    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN expires_at INTEGER")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN expiry_warned_at INTEGER")
+        .execute(pool)
+        .await;
+
+    // Index on seq for hub_audit_log to speed up cursor pagination and replay.
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_audit_seq ON hub_audit_log(seq)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_audit_event_type ON hub_audit_log(event_type)",
+    )
+    .execute(pool)
+    .await?;
+
     tracing::info!("Database migrations complete");
     Ok(())
 }
