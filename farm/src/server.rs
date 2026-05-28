@@ -28,6 +28,21 @@ pub fn create_router(state: Arc<FarmState>) -> Router {
             patch(routes::hubs::suspend_hub),
         )
         .route("/farm/hubs/{hub_id}", delete(routes::hubs::delete_hub))
+        // Phase 3 — farm settings (admin).
+        .route(
+            "/farm/settings",
+            get(routes::admin::get_settings).patch(routes::admin::patch_settings),
+        )
+        // Phase 3 — per-user quota (authenticated).
+        .route("/farm/me/hub-quota", get(routes::admin::me_hub_quota))
+        // Phase 3 — farm user index and session revocation (admin).
+        .route("/farm/users", get(routes::admin::list_users))
+        .route(
+            "/farm/users/{pubkey}/revoke-sessions",
+            post(routes::admin::revoke_user_sessions),
+        )
+        // Phase 3 — public discovery probe (unauthenticated).
+        .route("/farm/public-info", get(routes::admin::public_info))
         // Proxy catch-all — must be last (fallback for all /hub/<id>/... requests).
         .route(
             "/hub/{hub_id}/{*path}",

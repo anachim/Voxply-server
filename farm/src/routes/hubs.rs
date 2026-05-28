@@ -187,6 +187,103 @@ pub async fn create_hub(
     let farm_pubkey = state.public_key_hex();
     let payload = require_auth(&headers, &farm_pubkey)?;
 
+    // -----------------------------------------------------------------------
+    // Phase 3A: Enforce creation policy and quota before doing any real work.
+    // -----------------------------------------------------------------------
+    {
+        let policy_row: Option<(String, i64, i64)> = sqlx::query_as(
+            "SELECT creation_policy, max_hubs_per_user, max_hubs_total
+             FROM farms WHERE id = 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("db_error: {e}")})),
+            )
+        })?;
+
+        if let Some((creation_policy, max_hubs_per_user, max_hubs_total)) = policy_row {
+            let admin_pubkey = get_admin_pubkey(&state.db).await;
+            let is_admin = admin_pubkey.as_deref() == Some(payload.sub.as_str());
+
+            match creation_policy.as_str() {
+                "disabled" => {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "hub_creation_disabled"})),
+                    ));
+                }
+                "admin_only" => {
+                    if !is_admin {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            Json(serde_json::json!({"error": "admin_only"})),
+                        ));
+                    }
+                }
+                "open" => {
+                    // Per-user quota check.
+                    if max_hubs_per_user > 0 {
+                        let owned: i64 = sqlx::query_scalar(
+                            "SELECT COUNT(*) FROM hubs WHERE owner_pubkey = ? AND deleted_at IS NULL",
+                        )
+                        .bind(&payload.sub)
+                        .fetch_one(&state.db)
+                        .await
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({"error": format!("db_error: {e}")})),
+                            )
+                        })?;
+
+                        if owned >= max_hubs_per_user {
+                            return Err((
+                                StatusCode::FORBIDDEN,
+                                Json(serde_json::json!({"error": "user_quota_exceeded"})),
+                            ));
+                        }
+                    }
+
+                    // Farm-wide quota check.
+                    if max_hubs_total > 0 {
+                        let total: i64 = sqlx::query_scalar(
+                            "SELECT COUNT(*) FROM hubs WHERE deleted_at IS NULL",
+                        )
+                        .fetch_one(&state.db)
+                        .await
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({"error": format!("db_error: {e}")})),
+                            )
+                        })?;
+
+                        if total >= max_hubs_total {
+                            return Err((
+                                StatusCode::FORBIDDEN,
+                                Json(serde_json::json!({"error": "farm_quota_exceeded"})),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown policy value — treat as admin_only (safe default).
+                    if !is_admin {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            Json(serde_json::json!({"error": "admin_only"})),
+                        ));
+                    }
+                }
+            }
+        }
+        // If the farms row doesn't exist yet (first-start race), fall through and
+        // allow creation — the admin can configure policy once the row is seeded.
+    }
+
     // Validate name: 1-64 chars, alphanumeric + spaces + hyphens.
     let name = req.name.trim().to_string();
     if name.is_empty() || name.len() > 64 {

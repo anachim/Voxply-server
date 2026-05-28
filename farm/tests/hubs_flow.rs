@@ -43,12 +43,17 @@ async fn setup_with_farm_url(farm_url: &str) -> (TestServer, Arc<FarmState>) {
         .unwrap()
         .as_secs() as i64;
 
-    sqlx::query("INSERT INTO farms (id, public_key, created_at) VALUES (1, ?, ?)")
-        .bind(&pubkey_hex)
-        .bind(now)
-        .execute(&db)
-        .await
-        .unwrap();
+    // Use 'open' policy so existing hub-management tests don't need admin tokens.
+    // Policy-enforcement tests live in admin_flow.rs and set their own policy.
+    sqlx::query(
+        "INSERT INTO farms (id, public_key, created_at, creation_policy)
+         VALUES (1, ?, ?, 'open')",
+    )
+    .bind(&pubkey_hex)
+    .bind(now)
+    .execute(&db)
+    .await
+    .unwrap();
 
     let hub_manager = Arc::new(HubManager::new(
         "voxply-hub".to_string(),

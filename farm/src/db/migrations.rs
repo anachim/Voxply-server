@@ -78,5 +78,55 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Phase 3A: creation policy and quota columns.
+    let _ = sqlx::query(
+        "ALTER TABLE farms ADD COLUMN creation_policy TEXT NOT NULL DEFAULT 'admin_only'
+         CHECK(creation_policy IN ('open', 'admin_only', 'disabled'))",
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        "ALTER TABLE farms ADD COLUMN max_hubs_per_user INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        "ALTER TABLE farms ADD COLUMN max_hubs_total INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        "ALTER TABLE farms ADD COLUMN allow_discovery_listing INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+
+    // Phase 3E: locality and discovery metadata columns.
+    let _ = sqlx::query("ALTER TABLE farms ADD COLUMN languages TEXT NOT NULL DEFAULT '[\"en\"]'")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("ALTER TABLE farms ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("ALTER TABLE farms ADD COLUMN country TEXT")
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("ALTER TABLE farms ADD COLUMN region TEXT")
+        .execute(pool)
+        .await;
+
+    // Phase 3B: revoked_manually flag on farm_sessions for admin-initiated revocations.
+    let _ = sqlx::query(
+        "ALTER TABLE farm_sessions ADD COLUMN revoked_manually INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
