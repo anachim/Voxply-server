@@ -7,7 +7,7 @@ use crate::routes::bot_models::{
     AuthorInfo, BotResponse, ComponentInteraction, ComponentResponse, ComponentUpdate,
     EphemeralReply, SlashInvocation,
 };
-use crate::routes::chat_models::{ChatEvent, MessageResponse};
+use crate::routes::chat_models::{ChatEvent, MessageResponse, WsServerMessage};
 use crate::state::AppState;
 
 /// Hub URL placeholder — in production this comes from hub config. We read it
@@ -256,10 +256,14 @@ pub async fn dispatch_slash(
             visible_to_pubkey: visible_to.map(|s| s.to_string()),
         };
 
-        let _ = state.chat_tx.send(ChatEvent::New {
-            channel_id: channel_id.to_string(),
-            message,
-        });
+        {
+            let ws_msg = WsServerMessage::ChatMessage {
+                channel_id: channel_id.to_string(),
+                message: message.clone(),
+            };
+            let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+            let _ = state.chat_tx.send((ChatEvent::New { channel_id: channel_id.to_string(), message }, json));
+        }
     }
 
     // Slash command was handled (or deferred) — signal to caller not to store.
@@ -307,10 +311,14 @@ pub async fn insert_ephemeral_error(
         visible_to_pubkey: Some(invoker_pubkey.to_string()),
     };
 
-    let _ = state.chat_tx.send(ChatEvent::New {
-        channel_id: channel_id.to_string(),
-        message,
-    });
+    {
+        let ws_msg = WsServerMessage::ChatMessage {
+            channel_id: channel_id.to_string(),
+            message: message.clone(),
+        };
+        let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+        let _ = state.chat_tx.send((ChatEvent::New { channel_id: channel_id.to_string(), message }, json));
+    }
 
     Ok(())
 }
@@ -544,10 +552,12 @@ async fn apply_component_response(
 
         // Reload and broadcast the updated message.
         if let Ok(updated) = load_updated_message(state, message_id).await {
-            let _ = state.chat_tx.send(ChatEvent::Edited {
+            let ws_msg = WsServerMessage::MessageEdited {
                 channel_id: channel_id.to_string(),
-                message: updated,
-            });
+                message: updated.clone(),
+            };
+            let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+            let _ = state.chat_tx.send((ChatEvent::Edited { channel_id: channel_id.to_string(), message: updated }, json));
         }
     }
 
@@ -592,10 +602,14 @@ async fn apply_component_response(
             visible_to_pubkey: Some(interacting_user.to_string()),
         };
 
-        let _ = state.chat_tx.send(ChatEvent::New {
-            channel_id: channel_id.to_string(),
-            message,
-        });
+        {
+            let ws_msg = WsServerMessage::ChatMessage {
+                channel_id: channel_id.to_string(),
+                message: message.clone(),
+            };
+            let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+            let _ = state.chat_tx.send((ChatEvent::New { channel_id: channel_id.to_string(), message }, json));
+        }
     }
 }
 

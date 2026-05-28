@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::permissions;
-use crate::routes::chat_models::{ChatEvent, MessageResponse};
+use crate::routes::chat_models::{ChatEvent, MessageResponse, WsServerMessage};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -278,10 +278,14 @@ pub async fn post_webhook_message(
         visible_to_pubkey: None,
     };
 
-    let _ = state.chat_tx.send(ChatEvent::New {
-        channel_id: webhook.channel_id,
-        message,
-    });
+    {
+        let ws_msg = WsServerMessage::ChatMessage {
+            channel_id: webhook.channel_id.clone(),
+            message: message.clone(),
+        };
+        let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+        let _ = state.chat_tx.send((ChatEvent::New { channel_id: webhook.channel_id, message }, json));
+    }
 
     Ok(Json(WebhookPostResponse { id: msg_id }))
 }

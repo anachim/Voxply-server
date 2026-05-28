@@ -1001,6 +1001,54 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // FTS5 virtual table mirroring messages.content for fast full-text search.
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+         USING fts5(content, content='messages', content_rowid='rowid')",
+    )
+    .execute(pool)
+    .await?;
+
+    // Keep FTS5 in sync with the messages table.
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS messages_ai
+         AFTER INSERT ON messages BEGIN
+           INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+         END",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS messages_ad
+         AFTER DELETE ON messages BEGIN
+           INSERT INTO messages_fts(messages_fts, rowid, content)
+           VALUES ('delete', old.rowid, old.content);
+         END",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS messages_au
+         AFTER UPDATE ON messages BEGIN
+           INSERT INTO messages_fts(messages_fts, rowid, content)
+           VALUES ('delete', old.rowid, old.content);
+           INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+         END",
+    )
+    .execute(pool)
+    .await?;
+
+    // Back-fill existing messages into the FTS5 index (safe to run repeatedly).
+    sqlx::query(
+        "INSERT OR IGNORE INTO messages_fts(rowid, content)
+         SELECT rowid, content FROM messages
+         WHERE rowid NOT IN (SELECT rowid FROM messages_fts)",
+    )
+    .execute(pool)
+    .await?;
+
     tracing::info!("Database migrations complete");
     Ok(())
 }

@@ -81,7 +81,7 @@ pub struct AppState {
     pub hub_identity: Identity,
     pub db: SqlitePool,
     pub pending_challenges: RwLock<HashMap<String, PendingChallenge>>,
-    pub chat_tx: broadcast::Sender<ChatEvent>,
+    pub chat_tx: broadcast::Sender<(ChatEvent, Arc<str>)>,
     pub federation_client: FederationClient,
     pub peer_tokens: RwLock<HashMap<String, String>>,
     /// Plain HTTP client for outbound requests that don't go through the
@@ -89,6 +89,9 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     // Voice: channel_id → {public_key → udp_addr}
     pub voice_channels: RwLock<HashMap<String, HashMap<String, SocketAddr>>>,
+    /// Reverse index: SocketAddr → (channel_id, public_key).
+    /// Kept in sync with voice_channels by VoiceJoin/VoiceLeave handlers in ws.rs.
+    pub voice_addr_map: RwLock<HashMap<SocketAddr, (String, String)>>,
     pub voice_udp_port: u16,
     pub voice_event_tx: broadcast::Sender<(String, WsServerMessage)>,
     // DM relay: broadcast DMs to all WS clients (they filter by conversation membership)

@@ -175,7 +175,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
         tokio::select! {
             result = chat_rx.recv() => {
                 match result {
-                    Ok(event) => {
+                    Ok((event, pre_json)) => {
                         if subscribed.contains(event.channel_id()) {
                             if let crate::routes::chat_models::ChatEvent::Typing {
                                 public_key: sender_key, ..
@@ -192,34 +192,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                     }
                                 }
                             }
-                            let ws_msg = match event {
-                                crate::routes::chat_models::ChatEvent::New { channel_id, message } => {
-                                    WsServerMessage::ChatMessage { channel_id, message }
-                                }
-                                crate::routes::chat_models::ChatEvent::Edited { channel_id, message } => {
-                                    WsServerMessage::MessageEdited { channel_id, message }
-                                }
-                                crate::routes::chat_models::ChatEvent::Deleted { channel_id, message_id } => {
-                                    WsServerMessage::MessageDeleted { channel_id, message_id }
-                                }
-                                crate::routes::chat_models::ChatEvent::ReactionsUpdated { channel_id, message_id, reactions } => {
-                                    WsServerMessage::ReactionsUpdated { channel_id, message_id, reactions }
-                                }
-                                crate::routes::chat_models::ChatEvent::Typing { channel_id, public_key, display_name, typing } => {
-                                    WsServerMessage::Typing { channel_id, public_key, display_name, typing }
-                                }
-                                crate::routes::chat_models::ChatEvent::ScreenShareStarted {
-                                    channel_id, stream_id, sharer_pubkey, kind, mime, has_audio,
-                                } => WsServerMessage::ScreenShareStarted {
-                                    channel_id, stream_id, sharer_pubkey, kind, mime, has_audio,
-                                },
-                                crate::routes::chat_models::ChatEvent::ScreenShareStopped {
-                                    channel_id, stream_id, sharer_pubkey,
-                                } => WsServerMessage::ScreenShareStopped {
-                                    channel_id, stream_id, sharer_pubkey,
-                                },
-                            };
-                            let json = serde_json::to_string(&ws_msg).unwrap();
+                            let json = pre_json.to_string();
                             if is_replaying {
                                 replay_buffer.push(json);
                             } else if ws_tx.send(Message::Text(json.into())).await.is_err() {
@@ -354,6 +327,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                     .entry(channel_id.clone())
                                     .or_default()
                                     .insert(public_key.clone(), client_addr);
+                                state.voice_addr_map.write().await
+                                    .insert(client_addr, (channel_id.clone(), public_key.clone()));
 
                                 voice_channel = Some(channel_id.clone());
 
@@ -447,14 +422,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                 .await
                                 .ok()
                                 .flatten();
-                                let _ = state.chat_tx.send(
-                                    crate::routes::chat_models::ChatEvent::Typing {
-                                        channel_id,
-                                        public_key: public_key.clone(),
-                                        display_name,
-                                        typing,
-                                    },
+                                let ev = crate::routes::chat_models::ChatEvent::Typing {
+                                    channel_id: channel_id.clone(),
+                                    public_key: public_key.clone(),
+                                    display_name: display_name.clone(),
+                                    typing,
+                                };
+                                let ws_msg = WsServerMessage::Typing {
+                                    channel_id,
+                                    public_key: public_key.clone(),
+                                    display_name,
+                                    typing,
+                                };
+                                let json: std::sync::Arc<str> = std::sync::Arc::from(
+                                    serde_json::to_string(&ws_msg).unwrap().as_str(),
                                 );
+                                let _ = state.chat_tx.send((ev, json));
                             }
                             Ok(WsClientMessage::DmTyping { conversation_id, typing }) => {
                                 let display_name: Option<String> = sqlx::query_scalar(
@@ -505,14 +488,28 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                         started_at: std::time::Instant::now(),
                                     });
                                 }
-                                let _ = state.chat_tx.send(crate::routes::chat_models::ChatEvent::ScreenShareStarted {
-                                    channel_id,
-                                    stream_id,
-                                    sharer_pubkey: public_key.clone(),
-                                    kind,
-                                    mime,
-                                    has_audio,
-                                });
+                                {
+                                    let ev = crate::routes::chat_models::ChatEvent::ScreenShareStarted {
+                                        channel_id: channel_id.clone(),
+                                        stream_id: stream_id.clone(),
+                                        sharer_pubkey: public_key.clone(),
+                                        kind: kind.clone(),
+                                        mime: mime.clone(),
+                                        has_audio,
+                                    };
+                                    let ws_msg = WsServerMessage::ScreenShareStarted {
+                                        channel_id,
+                                        stream_id,
+                                        sharer_pubkey: public_key.clone(),
+                                        kind,
+                                        mime,
+                                        has_audio,
+                                    };
+                                    let json: std::sync::Arc<str> = std::sync::Arc::from(
+                                        serde_json::to_string(&ws_msg).unwrap().as_str(),
+                                    );
+                                    let _ = state.chat_tx.send((ev, json));
+                                }
                             }
 
                             Ok(WsClientMessage::ScreenShareChunk { channel_id, stream_id, seq, is_init }) => {
@@ -529,11 +526,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
                                         }
                                     }
                                 }
-                                let _ = state.chat_tx.send(crate::routes::chat_models::ChatEvent::ScreenShareStopped {
-                                    channel_id,
-                                    stream_id,
-                                    sharer_pubkey: public_key.clone(),
-                                });
+                                {
+                                    let ev = crate::routes::chat_models::ChatEvent::ScreenShareStopped {
+                                        channel_id: channel_id.clone(),
+                                        stream_id: stream_id.clone(),
+                                        sharer_pubkey: public_key.clone(),
+                                    };
+                                    let ws_msg = WsServerMessage::ScreenShareStopped {
+                                        channel_id,
+                                        stream_id,
+                                        sharer_pubkey: public_key.clone(),
+                                    };
+                                    let json: std::sync::Arc<str> = std::sync::Arc::from(
+                                        serde_json::to_string(&ws_msg).unwrap().as_str(),
+                                    );
+                                    let _ = state.chat_tx.send((ev, json));
+                                }
                             }
 
                             Ok(WsClientMessage::Resume { since_seq }) => {
@@ -756,12 +764,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, public_key: Stri
 }
 
 async fn leave_voice(state: &AppState, public_key: &str, channel_id: &str) {
-    let mut channels = state.voice_channels.write().await;
-    if let Some(participants) = channels.get_mut(channel_id) {
-        participants.remove(public_key);
-        if participants.is_empty() {
-            channels.remove(channel_id);
+    let removed_addr = {
+        let mut channels = state.voice_channels.write().await;
+        let addr = channels
+            .get_mut(channel_id)
+            .and_then(|participants| participants.remove(public_key));
+        if let Some(participants) = channels.get(channel_id) {
+            if participants.is_empty() {
+                channels.remove(channel_id);
+            }
         }
+        addr
+    };
+    if let Some(addr) = removed_addr {
+        state.voice_addr_map.write().await.remove(&addr);
     }
 
     let _ = state.voice_event_tx.send((

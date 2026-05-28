@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -80,7 +81,7 @@ async fn main() -> Result<()> {
 
     db::migrations::run(&db).await?;
 
-    let (chat_tx, _) = broadcast::channel(256);
+    let (chat_tx, _) = broadcast::channel::<(voxply_hub::routes::chat_models::ChatEvent, std::sync::Arc<str>)>(256);
     let (voice_event_tx, _) = broadcast::channel(256);
     let (dm_tx, _) = broadcast::channel(256);
     let (screen_share_tx, _) = broadcast::channel(256);
@@ -135,6 +136,7 @@ async fn main() -> Result<()> {
         peer_tokens: RwLock::new(HashMap::new()),
         http_client,
         voice_channels: RwLock::new(HashMap::new()),
+        voice_addr_map: RwLock::new(HashMap::new()),
         voice_udp_port,
         voice_event_tx,
         dm_tx,
@@ -158,19 +160,29 @@ async fn main() -> Result<()> {
             match voice_socket.recv_from(&mut buf).await {
                 Ok((len, from_addr)) => {
                     let packet_data = buf[..len].to_vec();
-                    // Find which channel this sender is in
-                    let channels = voice_state.voice_channels.read().await;
-                    for (_channel_id, participants) in channels.iter() {
-                        // Find if this sender is a participant (by UDP addr)
-                        let is_sender = participants.values().any(|addr| *addr == from_addr);
-                        if is_sender {
-                            // Forward to all OTHER participants in this channel
-                            for (_pk, addr) in participants {
-                                if *addr != from_addr {
-                                    let _ = voice_socket.send_to(&packet_data, addr).await;
-                                }
-                            }
-                            break;
+                    // O(1) lookup: which channel+peer owns this SocketAddr?
+                    let lookup = {
+                        let map = voice_state.voice_addr_map.read().await;
+                        map.get(&from_addr).cloned()
+                    };
+                    if let Some((channel_id, _sender_pk)) = lookup {
+                        // Collect destinations under the read lock, then drop it.
+                        let dests: Vec<SocketAddr> = {
+                            let channels = voice_state.voice_channels.read().await;
+                            channels
+                                .get(&channel_id)
+                                .map(|participants| {
+                                    participants
+                                        .values()
+                                        .filter(|a| **a != from_addr)
+                                        .copied()
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        };
+                        // Lock is dropped. Do syscalls without holding it.
+                        for addr in dests {
+                            let _ = voice_socket.send_to(&packet_data, addr).await;
                         }
                     }
                 }

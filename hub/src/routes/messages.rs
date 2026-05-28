@@ -189,10 +189,16 @@ pub async fn send_message(
         visible_to_pubkey: None,
     };
 
-    let _ = state.chat_tx.send(ChatEvent::New {
-        channel_id: channel_id.clone(),
-        message: message.clone(),
-    });
+    {
+        let ws_msg = crate::routes::chat_models::WsServerMessage::ChatMessage {
+            channel_id: channel_id.clone(),
+            message: message.clone(),
+        };
+        let json: std::sync::Arc<str> = std::sync::Arc::from(
+            serde_json::to_string(&ws_msg).unwrap().as_str(),
+        );
+        let _ = state.chat_tx.send((ChatEvent::New { channel_id: channel_id.clone(), message: message.clone() }, json));
+    }
 
     // Publish message.created audit event for bot subscriptions.
     {
@@ -256,10 +262,16 @@ pub async fn edit_message(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
     let updated = load_message(&state, &message_id).await?;
-    let _ = state.chat_tx.send(ChatEvent::Edited {
-        channel_id: channel_id.clone(),
-        message: updated.clone(),
-    });
+    {
+        let ws_msg = crate::routes::chat_models::WsServerMessage::MessageEdited {
+            channel_id: channel_id.clone(),
+            message: updated.clone(),
+        };
+        let json: std::sync::Arc<str> = std::sync::Arc::from(
+            serde_json::to_string(&ws_msg).unwrap().as_str(),
+        );
+        let _ = state.chat_tx.send((ChatEvent::Edited { channel_id: channel_id.clone(), message: updated.clone() }, json));
+    }
     Ok(Json(updated))
 }
 
@@ -294,10 +306,16 @@ pub async fn delete_message(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
-    let _ = state.chat_tx.send(ChatEvent::Deleted {
-        channel_id,
-        message_id,
-    });
+    {
+        let ws_msg = crate::routes::chat_models::WsServerMessage::MessageDeleted {
+            channel_id: channel_id.clone(),
+            message_id: message_id.clone(),
+        };
+        let json: std::sync::Arc<str> = std::sync::Arc::from(
+            serde_json::to_string(&ws_msg).unwrap().as_str(),
+        );
+        let _ = state.chat_tx.send((ChatEvent::Deleted { channel_id, message_id }, json));
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -362,15 +380,15 @@ pub async fn get_messages(
         // Search mode: ignores `before` for now — search returns the most
         // recent N matches across the whole channel. Good enough for v1.
         (Some(q), _) => {
-            let pattern = format!("%{q}%");
             sqlx::query_as::<_, MessageRow>(
                 "SELECT m.id, m.channel_id, m.sender, u.display_name as sender_name, m.content, m.attachments, m.reply_to, m.created_at, m.edited_at
                  FROM messages m LEFT JOIN users u ON m.sender = u.public_key
-                 WHERE m.channel_id = ? AND m.content LIKE ? COLLATE NOCASE
+                 WHERE m.channel_id = ?
+                   AND m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)
                  ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
             )
             .bind(&channel_id)
-            .bind(pattern)
+            .bind(q)
             .bind(limit)
             .fetch_all(&state.db)
             .await
@@ -574,11 +592,17 @@ pub async fn add_reaction(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
     let summary = load_reactions_anon(&state.db, &message_id).await?;
-    let _ = state.chat_tx.send(ChatEvent::ReactionsUpdated {
-        channel_id,
-        message_id,
-        reactions: summary,
-    });
+    {
+        let ws_msg = crate::routes::chat_models::WsServerMessage::ReactionsUpdated {
+            channel_id: channel_id.clone(),
+            message_id: message_id.clone(),
+            reactions: summary.clone(),
+        };
+        let json: std::sync::Arc<str> = std::sync::Arc::from(
+            serde_json::to_string(&ws_msg).unwrap().as_str(),
+        );
+        let _ = state.chat_tx.send((ChatEvent::ReactionsUpdated { channel_id, message_id, reactions: summary }, json));
+    }
 
     Ok(StatusCode::CREATED)
 }
@@ -599,11 +623,17 @@ pub async fn remove_reaction(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
     let summary = load_reactions_anon(&state.db, &message_id).await?;
-    let _ = state.chat_tx.send(ChatEvent::ReactionsUpdated {
-        channel_id,
-        message_id,
-        reactions: summary,
-    });
+    {
+        let ws_msg = crate::routes::chat_models::WsServerMessage::ReactionsUpdated {
+            channel_id: channel_id.clone(),
+            message_id: message_id.clone(),
+            reactions: summary.clone(),
+        };
+        let json: std::sync::Arc<str> = std::sync::Arc::from(
+            serde_json::to_string(&ws_msg).unwrap().as_str(),
+        );
+        let _ = state.chat_tx.send((ChatEvent::ReactionsUpdated { channel_id, message_id, reactions: summary }, json));
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

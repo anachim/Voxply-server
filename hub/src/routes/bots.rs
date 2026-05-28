@@ -471,7 +471,7 @@ pub async fn bot_send_message(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
     // Broadcast via the chat channel so connected WS clients see it.
-    use crate::routes::chat_models::{ChatEvent, MessageResponse};
+    use crate::routes::chat_models::{ChatEvent, MessageResponse, WsServerMessage};
     let message = MessageResponse {
         id,
         channel_id: req.channel_id.clone(),
@@ -485,10 +485,14 @@ pub async fn bot_send_message(
         reply_to: None,
         visible_to_pubkey: None,
     };
-    let _ = state.chat_tx.send(ChatEvent::New {
-        channel_id: req.channel_id,
-        message,
-    });
+    {
+        let ws_msg = WsServerMessage::ChatMessage {
+            channel_id: req.channel_id.clone(),
+            message: message.clone(),
+        };
+        let json: Arc<str> = Arc::from(serde_json::to_string(&ws_msg).unwrap().as_str());
+        let _ = state.chat_tx.send((ChatEvent::New { channel_id: req.channel_id, message }, json));
+    }
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

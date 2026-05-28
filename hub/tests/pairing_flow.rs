@@ -31,6 +31,7 @@ async fn setup() -> TestServer {
         federation_client: FederationClient::new(),
         peer_tokens: RwLock::new(HashMap::new()),
         voice_channels: RwLock::new(HashMap::new()),
+                voice_addr_map: RwLock::new(HashMap::new()),
         voice_udp_port: 0,
         voice_event_tx: broadcast::channel(16).0,
         dm_tx: broadcast::channel(16).0,
