@@ -1,106 +1,61 @@
-use anyhow::Result;
-use serde::Deserialize;
-use voxply_identity::Identity;
+use std::sync::Arc;
 
-#[derive(Deserialize)]
-struct ChallengeResponse {
-    challenge: String,
-}
-#[derive(Deserialize)]
-struct VerifyResponse {
-    token: String,
+use anyhow::{Context, Result};
+use sqlx::sqlite::SqlitePoolOptions;
+use voxply_seed::db;
+use voxply_seed::revalidation;
+use voxply_seed::server;
+use voxply_seed::state::SeedState;
+
+const DEFAULT_HTTP_PORT: u16 = 5000;
+
+fn port_from_env(var: &str, default: u16) -> Result<u16> {
+    match std::env::var(var) {
+        Ok(s) => s
+            .parse::<u16>()
+            .with_context(|| format!("{var}={s:?} is not a valid port (1..=65535)")),
+        Err(_) => Ok(default),
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let hub_url = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
+    tracing_subscriber::fmt::init();
 
-    let path = Identity::default_path()?;
-    let (identity, _) = Identity::load_or_create(&path)?;
-    let client = reqwest::Client::new();
-    let pub_key = identity.public_key_hex();
-
-    let challenge: ChallengeResponse = client
-        .post(format!("{hub_url}/auth/challenge"))
-        .json(&serde_json::json!({ "public_key": pub_key }))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    let challenge_bytes = hex::decode(&challenge.challenge)?;
-    let signature = identity.sign(&challenge_bytes);
-
-    let verify: VerifyResponse = client
-        .post(format!("{hub_url}/auth/verify"))
-        .json(&serde_json::json!({
-            "public_key": pub_key,
-            "challenge": challenge.challenge,
-            "signature": hex::encode(signature.to_bytes()),
-        }))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    let token = &verify.token;
-    println!("Authenticated as {}...", &pub_key[..16]);
-
-    client
-        .patch(format!("{hub_url}/me"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "display_name": "Admin" }))
-        .send()
-        .await?;
-    println!("Set display name: Admin");
-
-    for name in ["general", "random", "gaming"] {
-        let resp = client
-            .post(format!("{hub_url}/channels"))
-            .bearer_auth(token)
-            .json(&serde_json::json!({ "name": name }))
-            .send()
+    // `voxply-seed migrate` — run migrations and exit.
+    let subcommand = std::env::args().nth(1);
+    if subcommand.as_deref() == Some("migrate") {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite:seed.db?mode=rwc")
             .await?;
-        if resp.status().is_success() {
-            println!("Created channel: #{name}");
-        } else {
-            println!("Channel #{name} already exists");
-        }
-    }
-
-    let resp = client
-        .get(format!("{hub_url}/channels"))
-        .bearer_auth(token)
-        .send()
-        .await?;
-    let status = resp.status();
-    let body = resp.text().await?;
-    if !status.is_success() {
-        eprintln!("GET /channels failed ({status}): {body}");
+        db::migrations::run(&db).await?;
+        println!("Migrations applied to seed.db");
         return Ok(());
     }
-    let channels: Vec<serde_json::Value> = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("Failed to parse channels: {e}. Body: {body}"))?;
 
-    if let Some(general) = channels.iter().find(|c| c["name"] == "general") {
-        let ch_id = general["id"].as_str().unwrap();
-        for msg in [
-            "Welcome to Voxply!",
-            "This is the general channel.",
-            "Say hi!",
-        ] {
-            client
-                .post(format!("{hub_url}/channels/{ch_id}/messages"))
-                .bearer_auth(token)
-                .json(&serde_json::json!({ "content": msg }))
-                .send()
-                .await?;
-            println!("Sent: {msg}");
-        }
-    }
+    let http_port = port_from_env("VOXPLY_SEED_HTTP_PORT", DEFAULT_HTTP_PORT)?;
 
-    println!("Done! Hub is seeded.");
+    let db = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite:seed.db?mode=rwc")
+        .await
+        .context("Failed to open seed.db")?;
+
+    db::migrations::run(&db).await?;
+
+    let state = Arc::new(SeedState::new(db));
+
+    // Start the 6-hour revalidation background sweep.
+    revalidation::spawn(Arc::clone(&state));
+
+    let app = server::create_router(state);
+    let addr: std::net::SocketAddr = format!("0.0.0.0:{http_port}").parse()?;
+    tracing::info!(
+        "Seed discovery service listening on http://0.0.0.0:{http_port}"
+    );
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app.into_make_service()).await?;
+
     Ok(())
 }
