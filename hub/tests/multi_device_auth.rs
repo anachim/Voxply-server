@@ -211,7 +211,7 @@ async fn legacy_user_upgrade_preserves_canonical_pubkey() {
         .await
         .expect("upgrade auth");
 
-    // The canonical pubkey is still Alice's legacy pubkey — her
+    // The canonical pubkey is still Alice's legacy pubkey â€” her
     // existing role assignments and memberships are intact.
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&db)
@@ -346,7 +346,7 @@ async fn revoked_key_is_rejected_by_middleware() {
     // Revoke Alice's key.
     insert_revocation(&db, &alice.public_key_hex()).await;
 
-    // Existing token is now rejected — 401 with the revocation message.
+    // Existing token is now rejected â€” 401 with the revocation message.
     let resp = server
         .get("/me")
         .authorization_bearer(&token)

@@ -180,7 +180,7 @@ async fn priority_enforcement() {
         .await
         .assert_status_ok();
 
-    // User2 tries to create a role at priority 50 (= their own) — should fail
+    // User2 tries to create a role at priority 50 (= their own) â€” should fail
     let resp = server
         .post("/roles")
         .authorization_bearer(&token2)
@@ -192,7 +192,7 @@ async fn priority_enforcement() {
         .await;
     resp.assert_status(axum::http::StatusCode::FORBIDDEN);
 
-    // User2 creates a role at priority 49 (< their own) — should succeed
+    // User2 creates a role at priority 49 (< their own) â€” should succeed
     let resp = server
         .post("/roles")
         .authorization_bearer(&token2)
@@ -231,7 +231,7 @@ async fn permission_gating_on_channels() {
     let owner = Identity::generate();
     authenticate(&server, &owner).await;
 
-    // User2 (only @everyone) tries to create a channel — should fail
+    // User2 (only @everyone) tries to create a channel â€” should fail
     let user2 = Identity::generate();
     let token2 = authenticate(&server, &user2).await;
 

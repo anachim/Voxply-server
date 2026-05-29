@@ -122,7 +122,7 @@ async fn publish_dh_key_rejects_wrong_identity() {
     let alice_token = authenticate(&server, &alice).await;
     authenticate(&server, &bob).await;
 
-    // Alice tries to publish a DH key under Bob's pubkey — must be rejected.
+    // Alice tries to publish a DH key under Bob's pubkey â€” must be rejected.
     let bob_pubkey = bob.public_key_hex();
     let body = make_dh_publish_body(&bob);
     server

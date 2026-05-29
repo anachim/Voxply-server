@@ -286,7 +286,7 @@ async fn cannot_nest_under_non_category() {
         .await;
     let channel: ChannelResponse = resp.json();
 
-    // Try to nest under it (should fail — not a category)
+    // Try to nest under it (should fail â€” not a category)
     let resp = server
         .post("/channels")
         .authorization_bearer(&token)

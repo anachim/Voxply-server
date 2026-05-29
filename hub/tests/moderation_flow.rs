@@ -97,7 +97,7 @@ async fn ban_blocks_authentication() {
         .await;
     resp.assert_status(axum::http::StatusCode::CREATED);
 
-    // user2 tries to authenticate again — should be rejected
+    // user2 tries to authenticate again â€” should be rejected
     let pub_key = user2.public_key_hex();
     let resp = server
         .post("/auth/challenge")
@@ -459,7 +459,7 @@ async fn voice_mute_blocks_voice_join() {
         .await
         .unwrap();
 
-    // Victim attempts to join voice — should get an error frame, not voice_joined
+    // Victim attempts to join voice â€” should get an error frame, not voice_joined
     let frame = ws_voice_join_and_recv(&hub_url, &victim_token, &channel.id).await;
     assert_eq!(frame["type"], "error");
     assert_eq!(frame["context"], "voice_join");
@@ -490,7 +490,7 @@ async fn talk_power_blocks_low_priority_user() {
         .await
         .unwrap();
 
-    // Require talk power 100 — only the Owner role qualifies
+    // Require talk power 100 â€” only the Owner role qualifies
     client
         .post(format!("{hub_url}/channels/{}/talk-power", channel.id))
         .bearer_auth(&owner_token)
@@ -509,7 +509,7 @@ async fn talk_power_blocks_low_priority_user() {
     .unwrap();
     assert_eq!(stored, 100);
 
-    // Random user tries to join — should be refused
+    // Random user tries to join â€” should be refused
     let frame = ws_voice_join_and_recv(&hub_url, &rand_token, &channel.id).await;
     assert_eq!(frame["type"], "error");
     assert_eq!(frame["context"], "voice_join");
@@ -521,7 +521,7 @@ async fn talk_power_blocks_low_priority_user() {
 }
 
 // ---------------------------------------------------------------------------
-// Task #6 — Channel bans at /channels/:id/bans (pubkey field)
+// Task #6 â€” Channel bans at /channels/:id/bans (pubkey field)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -609,7 +609,7 @@ async fn channel_ban_v2_rejected_without_permission() {
         .await;
     let channel: ChannelResponse = resp.json();
 
-    // user2 (only @everyone) tries to ban owner via new route — should be 403
+    // user2 (only @everyone) tries to ban owner via new route â€” should be 403
     server
         .post(&format!("/channels/{}/bans", channel.id))
         .authorization_bearer(&token2)
@@ -619,7 +619,7 @@ async fn channel_ban_v2_rejected_without_permission() {
 }
 
 // ---------------------------------------------------------------------------
-// Task #7 — Per-channel voice mutes at /channels/:id/voice-mutes
+// Task #7 â€” Per-channel voice mutes at /channels/:id/voice-mutes
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -693,7 +693,7 @@ async fn channel_voice_mute_blocks_voice_join() {
 }
 
 // ---------------------------------------------------------------------------
-// Task #8 — Talk power: PATCH /channels/:id min_talk_power + raise-hand
+// Task #8 â€” Talk power: PATCH /channels/:id min_talk_power + raise-hand
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -718,7 +718,7 @@ async fn patch_channel_sets_min_talk_power() {
         .await
         .assert_status_ok();
 
-    // Verify via direct DB check is not needed — the WS enforcement test proves it works
+    // Verify via direct DB check is not needed â€” the WS enforcement test proves it works
 }
 
 #[tokio::test]

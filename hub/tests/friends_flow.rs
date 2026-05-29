@@ -175,7 +175,7 @@ async fn cross_hub_friend_add_skips_pending_and_caches_hub_url() {
 
     let alice = Identity::generate();
     let alice_token = authenticate(&server, &alice).await;
-    // Bob is not a member of this hub — he lives on remote_hub.
+    // Bob is not a member of this hub â€” he lives on remote_hub.
     let bob = Identity::generate();
     let remote_hub = "https://other-hub.example.com";
 
@@ -191,7 +191,7 @@ async fn cross_hub_friend_add_skips_pending_and_caches_hub_url() {
         .await
         .assert_status(axum::http::StatusCode::CREATED);
 
-    // No pending request should appear — cross-hub adds skip pending state
+    // No pending request should appear â€” cross-hub adds skip pending state
     // because there's no federated notification path yet.
     let resp = server
         .get("/friends/pending")
@@ -241,7 +241,7 @@ async fn same_hub_friend_omits_hub_url_in_response() {
     let friends = resp.json::<serde_json::Value>();
     let arr = friends.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    // Same-hub friends don't carry a hub_url — the friend lives on this hub.
+    // Same-hub friends don't carry a hub_url â€” the friend lives on this hub.
     assert!(arr[0]["hub_url"].is_null(), "same-hub friend should have null hub_url");
 }
 

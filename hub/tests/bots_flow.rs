@@ -74,7 +74,7 @@ async fn any_member_can_create_list_and_delete_bot() {
     let member = Identity::generate();
     let member_token = authenticate(&server, &member).await;
 
-    // Create a bot — any authenticated user can create
+    // Create a bot â€” any authenticated user can create
     let resp = server
         .post("/admin/bots")
         .authorization_bearer(&member_token)

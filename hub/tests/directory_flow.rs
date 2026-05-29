@@ -155,7 +155,7 @@ async fn directory_sign_rejects_non_admin() {
     // Log in the owner first to create the hub.
     let _owner_token = authenticate(&server, &owner).await;
 
-    // A second user that joins — they will only have the built-in "everyone" role.
+    // A second user that joins â€” they will only have the built-in "everyone" role.
     let regular_user = Identity::generate();
     let user_token = authenticate(&server, &regular_user).await;
 

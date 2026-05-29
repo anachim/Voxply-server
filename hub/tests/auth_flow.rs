@@ -14,7 +14,7 @@ use voxply_hub::state::AppState;
 use voxply_identity::Identity;
 
 async fn setup() -> TestServer {
-    // In-memory SQLite for tests — no file created, fresh every time
+    // In-memory SQLite for tests â€” no file created, fresh every time
     let db = SqlitePoolOptions::new()
         .connect("sqlite::memory:")
         .await
@@ -125,7 +125,7 @@ async fn authenticate(server: &TestServer, identity: &Identity) -> String {
 async fn pending_members_are_blocked_until_approved() {
     let server = setup().await;
 
-    // Owner signs up first — auto-approved since they're the hub creator.
+    // Owner signs up first â€” auto-approved since they're the hub creator.
     let owner = Identity::generate();
     let owner_token = authenticate(&server, &owner).await;
 
@@ -137,7 +137,7 @@ async fn pending_members_are_blocked_until_approved() {
         .await
         .assert_status_ok();
 
-    // New member joins — they get a token but start pending.
+    // New member joins â€” they get a token but start pending.
     let newbie = Identity::generate();
     let newbie_token = authenticate(&server, &newbie).await;
 

@@ -117,7 +117,7 @@ async fn dm_conversation_dedup() {
         .await;
     let conv1: ConversationResponse = resp.json();
 
-    // Second creation between same two users — should reuse
+    // Second creation between same two users â€” should reuse
     let resp = server
         .post("/conversations")
         .authorization_bearer(&alice_token)
@@ -401,7 +401,7 @@ async fn dm_delivered_across_hubs() {
     // Give the async federation request time to land.
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Bob reads the thread from Hub B — message should have been federated there.
+    // Bob reads the thread from Hub B â€” message should have been federated there.
     let resp = client
         .get(format!("{hub_b}/conversations/{}/messages", conv.id))
         .bearer_auth(&bob_token)
@@ -554,7 +554,7 @@ async fn list_dm_messages_marks_bounced_as_delivery_failed() {
     let alice_token = authenticate(&server, &alice).await;
     let bob = Identity::generate();
 
-    // Alice creates a DM to Bob with a remote hub URL — Bob isn't on this
+    // Alice creates a DM to Bob with a remote hub URL â€” Bob isn't on this
     // hub, so the conversation needs hub_url for him.
     let resp = server
         .post("/conversations")
@@ -576,7 +576,7 @@ async fn list_dm_messages_marks_bounced_as_delivery_failed() {
         .await
         .assert_status(axum::http::StatusCode::CREATED);
 
-    // Pretend the worker exhausted retries — mark the outbox row bounced.
+    // Pretend the worker exhausted retries â€” mark the outbox row bounced.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -588,7 +588,7 @@ async fn list_dm_messages_marks_bounced_as_delivery_failed() {
         .await
         .unwrap();
 
-    // List the conversation — the message should be marked delivery_failed=true.
+    // List the conversation â€” the message should be marked delivery_failed=true.
     let resp = server
         .get(&format!("/conversations/{}/messages", conv.id))
         .authorization_bearer(&alice_token)
@@ -654,7 +654,7 @@ async fn send_dm_uses_home_hub_designation_when_present() {
     authenticate_http(&hub_b, &bob).await;
 
     // Alice creates a conversation on Hub A. She supplies an unreachable
-    // placeholder as Bob's hub_url — the designation should override it.
+    // placeholder as Bob's hub_url â€” the designation should override it.
     let placeholder_url = "http://placeholder.invalid";
     let resp = client
         .post(format!("{hub_a}/conversations"))
@@ -710,7 +710,7 @@ async fn send_dm_uses_home_hub_designation_when_present() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Bob reads from Hub B — message should have arrived via the designation.
+    // Bob reads from Hub B â€” message should have arrived via the designation.
     let bob_token = authenticate_http(&hub_b, &bob).await;
     let resp = client
         .get(format!("{hub_b}/conversations/{}/messages", conv.id))
@@ -738,7 +738,7 @@ async fn send_dm_falls_back_to_hub_url_when_no_designation() {
     let alice_token = authenticate_http(&hub_a, &alice).await;
     authenticate_http(&hub_b, &bob).await;
 
-    // No designation row — only hub_url in member_hubs.
+    // No designation row â€” only hub_url in member_hubs.
     let resp = client
         .post(format!("{hub_a}/conversations"))
         .bearer_auth(&alice_token)
