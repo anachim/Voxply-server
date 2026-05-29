@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use voxply_identity::SubkeyCert;
 
 use crate::routes::bot_models::BotMeta;
+use crate::routes::certs::Certification;
 
 #[derive(Deserialize)]
 pub struct ChallengeRequest {
@@ -52,6 +53,10 @@ pub struct VerifyRequest {
     /// is_bot=true.
     #[serde(default)]
     pub bot_meta: Option<BotMeta>,
+    /// Hub certifications presented at auth time. Evaluated when
+    /// cert_mode != 'none' (Task #21).
+    #[serde(default)]
+    pub certifications: Option<Vec<Certification>>,
 }
 
 #[derive(Serialize, Deserialize)]

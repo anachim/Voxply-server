@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod bots;
+pub mod cert_worker;
 pub mod db;
 pub mod dm_worker;
 pub mod federation;

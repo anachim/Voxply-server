@@ -289,6 +289,71 @@ pub async fn verify(
         }
     }
 
+    // Check cert_mode requirement (Task #21).
+    let cert_mode = crate::routes::certs::load_cert_mode(&state).await;
+    if cert_mode != "none" {
+        let trusted_issuers = crate::routes::certs::load_trusted_issuers(&state).await;
+        let cert_require = crate::routes::certs::load_cert_require(&state).await;
+
+        // Resolve the master pubkey: with a subkey cert it's the master, otherwise the auth pubkey.
+        let master_pk = req.subkey_cert
+            .as_ref()
+            .map(|c| c.master_pubkey.clone())
+            .unwrap_or_else(|| req.public_key.clone());
+
+        let certs = req.certifications.as_deref().unwrap_or(&[]);
+
+        let satisfied = certs.iter().any(|cert| {
+            // Run sync-safe verification; async only needed for /info lookup which we skip
+            // in v1 (we trust the signature; issuer /info is advisory for display/trust list).
+            let payload = &cert.payload;
+
+            let now_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            if payload.subject_pubkey != master_pk { return false; }
+            if now_ts > payload.expires_at { return false; }
+            if payload.standing != "good" { return false; }
+
+            let sig_bytes = match hex::decode(&cert.signature) {
+                Ok(b) => b,
+                Err(_) => return false,
+            };
+            let payload_json = match serde_json::to_string(payload) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            if voxply_identity::verify_signature(&payload.issuer_pubkey, payload_json.as_bytes(), &sig_bytes).is_err() {
+                return false;
+            }
+
+            // cert_require property rules
+            if let Some(min_pow) = cert_require.min_pow_level {
+                match payload.pow_level {
+                    Some(lvl) if lvl >= min_pow => {}
+                    _ => return false,
+                }
+            }
+            if let Some(min_days) = cert_require.min_member_since_days {
+                let required_since = now_ts - (min_days as i64) * 86400;
+                if payload.member_since > required_since { return false; }
+            }
+
+            // trust check
+            match cert_mode.as_str() {
+                "any" => true,
+                "trusted" => trusted_issuers.iter().any(|ti| ti.pubkey == payload.issuer_pubkey),
+                _ => false,
+            }
+        });
+
+        if !satisfied {
+            return Err((StatusCode::FORBIDDEN, "cert_required".to_string()));
+        }
+    }
+
     let now = unix_timestamp();
 
     // Does this hub gate new members behind admin approval?

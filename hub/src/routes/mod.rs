@@ -1,5 +1,6 @@
 pub mod badges;
 pub mod bots;
+pub mod certs;
 pub mod bot_models;
 pub mod webhooks;
 pub mod alliance_models;

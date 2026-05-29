@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePoolOptions;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, RwLock};
+use voxply_hub::cert_worker;
 use voxply_hub::db;
 use voxply_hub::bots::token_expiry;
 use voxply_hub::dm_worker;
@@ -199,6 +200,9 @@ async fn main() -> Result<()> {
 
     // Warn bots about expiring tokens.
     token_expiry::spawn(state.clone());
+
+    // Issue certifications to eligible members daily.
+    cert_worker::spawn(state.clone());
 
     let app = server::create_router(state);
     let addr: std::net::SocketAddr = format!("0.0.0.0:{http_port}").parse()?;

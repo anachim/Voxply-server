@@ -1247,6 +1247,94 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES ('builtin-owner', 'manage_posts')")
         .execute(pool).await?;
 
+    // ---- Feature: Hub Certifications (#20 / #21) ----
+
+    // Issuing-hub ledger: one row per issued cert (including revoked re-issues).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS cert_issuances (
+            id             TEXT PRIMARY KEY,
+            subject_pubkey TEXT NOT NULL,
+            pow_level      INTEGER,
+            member_since   INTEGER NOT NULL,
+            issued_at      INTEGER NOT NULL,
+            expires_at     INTEGER NOT NULL,
+            revoked_at     INTEGER,
+            standing       TEXT NOT NULL DEFAULT 'good',
+            payload_json   TEXT NOT NULL,
+            signature      TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_cert_issuances_subject
+         ON cert_issuances(subject_pubkey, issued_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
+    // Home-hub portfolio: opaque issuer-signed blobs, replicated across devices.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_certs (
+            id             TEXT PRIMARY KEY,
+            master_pubkey  TEXT NOT NULL,
+            issuer_pubkey  TEXT NOT NULL,
+            issuer_url     TEXT NOT NULL,
+            payload_json   TEXT NOT NULL,
+            signature      TEXT NOT NULL,
+            expires_at     INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_user_certs_master
+         ON user_certs(master_pubkey)",
+    )
+    .execute(pool)
+    .await?;
+
+    // Cert settings: issuance side
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_auto_issue', 'true')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_standing_days', '30')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_validity_days', '90')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_min_pow_level', '0')",
+    )
+    .execute(pool)
+    .await?;
+
+    // Cert settings: admission side (#21)
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_mode', 'none')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_trusted_issuers', '[]')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('cert_require', '{}')",
+    )
+    .execute(pool)
+    .await?;
+
     // ---- Feature: Self-tags (#12) ----
     // Seed hub_tags and hub_nsfw into hub_settings. JSON array of strings.
     sqlx::query(

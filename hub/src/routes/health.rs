@@ -5,6 +5,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::routes::badges::BadgeEnvelope;
+use crate::routes::certs::CertRequirement;
 use crate::state::AppState;
 
 pub async fn health() -> Json<HealthResponse> {
@@ -58,6 +59,7 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
     let badges = crate::routes::badges::load_active_badges(&state).await;
 
     let branding = crate::routes::hub::read_branding(&state).await;
+    let cert_requirement = crate::routes::certs::load_cert_requirement(&state).await;
 
     Json(InfoResponse {
         name: branding.name,
@@ -73,6 +75,7 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
         self_tags,
         nsfw,
         badges,
+        cert_requirement,
     })
 }
 
@@ -110,4 +113,8 @@ pub struct InfoResponse {
     /// Accepted, non-expired badge envelopes (signed by issuer hubs).
     #[serde(default)]
     pub badges: Vec<BadgeEnvelope>,
+    /// Cert admission requirement, or null when cert_mode = 'none'.
+    /// Clients read this pre-auth to know which certs to present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cert_requirement: Option<CertRequirement>,
 }

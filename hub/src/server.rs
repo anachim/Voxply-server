@@ -189,6 +189,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/identity/pairing/claim", post(routes::pairing::post_claim))
         .route("/identity/pairing/complete", post(routes::pairing::post_complete))
         .route("/identity/pairing/status/{token}", get(routes::pairing::get_status))
+        // ---- Certification routes (Task #20 / #21) ----
+        .route("/admin/certs", get(routes::certs::admin_list))
+        .route("/admin/certs/{pubkey}", post(routes::certs::admin_issue))
+        .route("/admin/certs/{pubkey}/revoke", post(routes::certs::admin_revoke))
+        .route("/admin/settings/certs", patch(routes::certs::patch_cert_settings))
+        .route("/identity/{pubkey}/certs", get(routes::certs::list_user_certs))
         // ---- Badge admin routes ----
         .route("/badges/pending", get(routes::badges::list_pending))
         .route("/badges/pending/{id}/accept", post(routes::badges::accept_pending))
