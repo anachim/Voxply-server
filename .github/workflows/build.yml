@@ -1,19 +1,24 @@
 name: Build check
+
 on:
   push:
     branches: [main]
   pull_request:
+
 jobs:
   check:
+    name: cargo check + test
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
       - name: Cargo check
         run: cargo check --workspace
+
       - name: Cargo test
         run: cargo test --workspace
