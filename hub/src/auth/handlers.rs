@@ -255,6 +255,40 @@ pub async fn verify(
         }
     }
 
+    // Check min_pow_level requirement (structured pow_proof field).
+    let min_pow_level: u8 = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM hub_settings WHERE key = 'min_pow_level'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(0);
+
+    if min_pow_level > 0 {
+        match &req.pow_proof {
+            None => {
+                return Err((StatusCode::FORBIDDEN, "pow_required".to_string()));
+            }
+            Some(proof) => {
+                if proof.level < min_pow_level {
+                    return Err((StatusCode::FORBIDDEN, "pow_required".to_string()));
+                }
+                let nonce: u64 = proof
+                    .nonce
+                    .parse()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid pow_proof nonce".to_string()))?;
+                if !voxply_identity::verify_security_level(
+                    &req.public_key,
+                    nonce,
+                    proof.level as u32,
+                ) {
+                    return Err((StatusCode::FORBIDDEN, "pow_required".to_string()));
+                }
+            }
+        }
+    }
+
     let now = unix_timestamp();
 
     // Does this hub gate new members behind admin approval?

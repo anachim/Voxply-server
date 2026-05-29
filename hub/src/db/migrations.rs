@@ -726,6 +726,15 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // ---- Feature: PoW minimum level on auth ----
+    // 0 = off (no PoW required). Clients read this from GET /info and submit
+    // pow_proof in /auth/verify when the level is > 0.
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('min_pow_level', '0')",
+    )
+    .execute(pool)
+    .await?;
+
     // ---- Feature: Role Questionnaire / Onboarding Survey ----
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS surveys (

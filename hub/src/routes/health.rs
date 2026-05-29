@@ -23,6 +23,16 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
     .and_then(|v| v.parse().ok())
     .unwrap_or(0);
 
+    let min_pow_level: u8 = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM hub_settings WHERE key = 'min_pow_level'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(0);
+
     let invite_only: bool = sqlx::query_scalar::<_, String>(
         "SELECT value FROM hub_settings WHERE key = 'invite_only'",
     )
@@ -51,6 +61,7 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         public_key: state.hub_identity.public_key_hex(),
         min_security_level,
+        min_pow_level,
         invite_only,
         challenge_mode,
         farm_url: state.farm_url.clone(),
@@ -72,6 +83,9 @@ pub struct InfoResponse {
     pub version: String,
     pub public_key: String,
     pub min_security_level: u32,
+    /// Minimum PoW level required to authenticate via the structured
+    /// `pow_proof` field in `/auth/verify`. 0 means no PoW required.
+    pub min_pow_level: u8,
     pub invite_only: bool,
     #[serde(default)]
     pub challenge_mode: String,

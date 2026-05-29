@@ -53,6 +53,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             axum::routing::patch(routes::hub_icons::rename_icon)
                 .delete(routes::hub_icons::delete_icon),
         )
+        .route("/admin/settings/pow", get(routes::hub::get_pow_settings).patch(routes::hub::patch_pow_settings))
         .route("/admin/settings/channel-depth", get(routes::hub::get_channel_depth).patch(routes::hub::patch_channel_depth))
         .route("/admin/directory-sign", post(routes::directory::sign_for_directory))
         .route("/profile/{pubkey}", get(routes::profile::get_profile).put(routes::profile::put_profile))

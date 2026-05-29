@@ -93,6 +93,45 @@ pub async fn approve_user(
     Ok(StatusCode::OK)
 }
 
+/// GET /admin/settings/pow — returns the current min_pow_level setting.
+pub async fn get_pow_settings(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<PowSettingsResponse>, (StatusCode, String)> {
+    let perms = permissions::user_permissions(&state.db, &user.public_key).await?;
+    perms.require(ADMIN)?;
+
+    let min_pow_level: u8 = read_setting(&state.db, "min_pow_level")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    Ok(Json(PowSettingsResponse { min_pow_level }))
+}
+
+/// PATCH /admin/settings/pow — updates the min_pow_level setting.
+pub async fn patch_pow_settings(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<PowSettingsRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let perms = permissions::user_permissions(&state.db, &user.public_key).await?;
+    perms.require(ADMIN)?;
+
+    upsert_setting(&state.db, "min_pow_level", &req.min_pow_level.to_string()).await?;
+    Ok(StatusCode::OK)
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PowSettingsResponse {
+    pub min_pow_level: u8,
+}
+
+#[derive(Deserialize)]
+pub struct PowSettingsRequest {
+    pub min_pow_level: u8,
+}
+
 /// GET /admin/settings/channel-depth — returns the current max_channel_depth setting.
 pub async fn get_channel_depth(
     State(state): State<Arc<AppState>>,
