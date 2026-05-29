@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::routes::badges::BadgeEnvelope;
 use crate::state::AppState;
 
 pub async fn health() -> Json<HealthResponse> {
@@ -52,6 +53,10 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
     .flatten()
     .unwrap_or_else(|| "off".to_string());
 
+    let self_tags = crate::routes::tags::load_tags(&state).await.unwrap_or_default();
+    let nsfw = crate::routes::tags::load_nsfw(&state).await;
+    let badges = crate::routes::badges::load_active_badges(&state).await;
+
     let branding = crate::routes::hub::read_branding(&state).await;
 
     Json(InfoResponse {
@@ -65,6 +70,9 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Json<InfoResponse> {
         invite_only,
         challenge_mode,
         farm_url: state.farm_url.clone(),
+        self_tags,
+        nsfw,
+        badges,
     })
 }
 
@@ -93,4 +101,13 @@ pub struct InfoResponse {
     /// Clients see this field and route `/auth/*` calls to the farm when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub farm_url: Option<String>,
+    /// Hub-authoritative self-tags (free-form search keywords, not trust marks).
+    #[serde(default)]
+    pub self_tags: Vec<String>,
+    /// Whether this hub is marked NSFW by its operator.
+    #[serde(default)]
+    pub nsfw: bool,
+    /// Accepted, non-expired badge envelopes (signed by issuer hubs).
+    #[serde(default)]
+    pub badges: Vec<BadgeEnvelope>,
 }

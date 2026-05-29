@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -264,6 +265,94 @@ pub async fn send_federated_message(
             created_at: msg.created_at,
         }),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Federation: badge-offer endpoint (unauthenticated, signature is the auth)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct BadgeOfferRequest {
+    /// Hex Ed25519 public key of the hub sending the offer.
+    pub from_hub_pubkey: String,
+    /// Self-reported URL of the issuer hub (informational, not trusted for routing).
+    pub from_hub_url: String,
+    /// Human-readable badge label.
+    pub label: String,
+    /// Optional human-readable note from the issuer.
+    pub note: Option<String>,
+    /// Canonical JSON payload (BadgePayload serialised deterministically).
+    pub payload: String,
+    /// Hex Ed25519 signature over `payload` bytes.
+    pub signature: String,
+}
+
+/// POST /federation/badge-offer
+///
+/// Unauthenticated endpoint: anyone can POST here, but we require a valid
+/// Ed25519 signature from `from_hub_pubkey` over `payload` bytes, and we
+/// verify that `payload.subject_pubkey` matches this hub's own public key.
+/// Valid offers land in `badge_offers` for the admin to accept or decline.
+pub async fn receive_badge_offer(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BadgeOfferRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // 1. Parse and validate payload shape.
+    let payload: crate::routes::badges::BadgePayload =
+        serde_json::from_str(&req.payload)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Malformed badge payload JSON".to_string()))?;
+
+    // 2. Verify that the subject is this hub.
+    let our_pubkey = state.hub_identity.public_key_hex();
+    if payload.subject_pubkey != our_pubkey {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Badge subject_pubkey does not match this hub".to_string(),
+        ));
+    }
+
+    // 3. Verify Ed25519 signature: from_hub_pubkey signs the payload bytes.
+    let sig_bytes = hex::decode(&req.signature)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid signature hex".to_string()))?;
+    voxply_identity::verify_signature(&req.from_hub_pubkey, req.payload.as_bytes(), &sig_bytes)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "Badge signature verification failed".to_string()))?;
+
+    // 4. Also validate that the issuer_pubkey in the payload matches from_hub_pubkey.
+    if payload.issuer_pubkey != req.from_hub_pubkey {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "payload.issuer_pubkey does not match from_hub_pubkey".to_string(),
+        ));
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let created_at = crate::auth::handlers::unix_timestamp_iso();
+
+    sqlx::query(
+        "INSERT INTO badge_offers
+         (id, from_hub_pubkey, from_hub_url, label, note, payload, signature, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&req.from_hub_pubkey)
+    .bind(&req.from_hub_url)
+    .bind(&req.label)
+    .bind(&req.note)
+    .bind(&req.payload)
+    .bind(&req.signature)
+    .bind(&created_at)
+    .execute(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
+
+    tracing::info!(
+        "Received badge offer '{}' from {} ({})",
+        req.label,
+        req.from_hub_url,
+        &req.from_hub_pubkey[..16.min(req.from_hub_pubkey.len())]
+    );
+
+    Ok(StatusCode::CREATED)
 }
 
 // Helpers

@@ -1247,6 +1247,68 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES ('builtin-owner', 'manage_posts')")
         .execute(pool).await?;
 
+    // ---- Feature: Self-tags (#12) ----
+    // Seed hub_tags and hub_nsfw into hub_settings. JSON array of strings.
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('hub_tags', '[]')",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO hub_settings (key, value) VALUES ('hub_nsfw', 'false')",
+    )
+    .execute(pool)
+    .await?;
+
+    // ---- Feature: Badge federation (#13) ----
+    // Pending badge offers received from other hubs (unauthenticated push).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS badge_offers (
+            id               TEXT PRIMARY KEY,
+            from_hub_pubkey  TEXT NOT NULL,
+            from_hub_url     TEXT NOT NULL,
+            label            TEXT NOT NULL,
+            note             TEXT,
+            payload          TEXT NOT NULL,
+            signature        TEXT NOT NULL,
+            created_at       TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Accepted badges this hub holds and presents in /info.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS hub_badges (
+            id             TEXT PRIMARY KEY,
+            issuer_pubkey  TEXT NOT NULL,
+            issuer_url     TEXT NOT NULL,
+            label          TEXT NOT NULL,
+            payload        TEXT NOT NULL,
+            signature      TEXT NOT NULL,
+            accepted_at    TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Badges this hub has issued to other hubs.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS issued_badges (
+            id                  TEXT PRIMARY KEY,
+            recipient_hub_url   TEXT NOT NULL,
+            recipient_hub_pubkey TEXT NOT NULL,
+            label               TEXT NOT NULL,
+            payload             TEXT NOT NULL,
+            signature           TEXT NOT NULL,
+            issued_at           TEXT NOT NULL,
+            expires_at          TEXT
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     tracing::info!("Database migrations complete");
     Ok(())
 }

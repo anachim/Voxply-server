@@ -1,3 +1,4 @@
+pub mod badges;
 pub mod bots;
 pub mod bot_models;
 pub mod webhooks;
@@ -31,3 +32,4 @@ pub mod users;
 pub mod ws;
 pub mod post_models;
 pub mod posts;
+pub mod tags;

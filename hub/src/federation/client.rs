@@ -181,4 +181,41 @@ impl FederationClient {
             .await
             .context("Failed to deliver DM to peer")
     }
+
+    /// POST a badge offer to a remote hub's unauthenticated
+    /// `/federation/badge-offer` endpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn post_badge_offer(
+        &self,
+        base_url: &str,
+        from_hub_pubkey: &str,
+        from_hub_url: &str,
+        label: &str,
+        note: Option<&str>,
+        payload: &str,
+        signature: &str,
+    ) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{base_url}/federation/badge-offer"))
+            .json(&serde_json::json!({
+                "from_hub_pubkey": from_hub_pubkey,
+                "from_hub_url": from_hub_url,
+                "label": label,
+                "note": note,
+                "payload": payload,
+                "signature": signature,
+            }))
+            .send()
+            .await
+            .context("Failed to reach recipient hub")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Recipient returned HTTP {status}: {body}");
+        }
+
+        Ok(())
+    }
 }

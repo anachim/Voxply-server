@@ -509,6 +509,38 @@ pub fn unix_timestamp() -> i64 {
         .as_secs() as i64
 }
 
+/// Returns the current UTC time as a compact ISO-8601 string
+/// (`YYYY-MM-DDTHH:MM:SSZ`). Used for badge timestamps.
+pub fn unix_timestamp_iso() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hour = time_of_day / 3600;
+    let minute = (time_of_day % 3600) / 60;
+    let second = time_of_day % 60;
+
+    let jdn = days + 2_440_588;
+    let l = jdn + 68_569;
+    let n = (4 * l) / 146_097;
+    let l = l - (146_097 * n + 3) / 4;
+    let year_i = (4_000 * (l + 1)) / 1_461_001;
+    let l = l - (1_461 * year_i) / 4 + 31;
+    let month_i = (80 * l) / 2_447;
+    let day = l - (2_447 * month_i) / 80;
+    let l = month_i / 11;
+    let month = month_i + 2 - 12 * l;
+    let year = 100 * (n - 49) + year_i + l;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
 /// POST /auth/renew — issue a fresh session token while the current one is
 /// still live. Intended for bots renewing their long-lived tokens proactively.
 /// The old token is NOT invalidated — the running WS session continues on it.
