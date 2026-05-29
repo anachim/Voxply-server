@@ -1,0 +1,36 @@
+# Standalone hub — no farm, hub-issued auth tokens.
+#
+# Quick start:
+#   docker compose up -d
+#
+# To build locally instead of pulling from ghcr.io, uncomment the build: block.
+# To enable HTTPS, set VOXPLY_TLS_CERT and VOXPLY_TLS_KEY (see below).
+# For a farm + hub setup, use docker-compose.farm.yml instead.
+
+services:
+  hub:
+    image: ghcr.io/voxply/hub:latest
+    # build:
+    #   context: .
+    #   dockerfile: hub/Dockerfile
+    ports:
+      - "${VOXPLY_HTTP_PORT:-3000}:3000"
+      - "${VOXPLY_VOICE_UDP_PORT:-3001}:3001/udp"
+    volumes:
+      - hub-data:/data
+      # Mount TLS certificates when HTTPS is enabled:
+      # - /etc/letsencrypt/live/your.domain:/certs:ro
+    environment:
+      VOXPLY_HTTP_PORT: "3000"
+      VOXPLY_VOICE_UDP_PORT: "3001"
+      # Uncomment for HTTPS (both must be set together):
+      # VOXPLY_TLS_CERT: /certs/fullchain.pem
+      # VOXPLY_TLS_KEY: /certs/privkey.pem
+      # Uncomment for structured JSON logs:
+      # VOXPLY_LOG_FORMAT: json
+      # Uncomment for Sentry error reporting:
+      # VOXPLY_SENTRY_DSN: https://...@sentry.io/...
+    restart: unless-stopped
+
+volumes:
+  hub-data:

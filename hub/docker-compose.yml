@@ -1,17 +1,3 @@
-version: "3.9"
-services:
-  hub:
-    image: ghcr.io/voxply/hub:latest
-    ports:
-      - "3000:3000"
-      - "3001:3001/udp"
-    volumes:
-      - hub-data:/data
-    environment:
-      DATABASE_URL: sqlite:///data/hub.db
-      BIND_ADDR: 0.0.0.0:3000
-      HUB_IDENTITY_PATH: /data/hub_identity.json
-      VOICE_UDP_PORT: "3001"
-    restart: unless-stopped
-volumes:
-  hub-data:
+# This file has moved to the workspace root.
+# Use docker-compose.yml (standalone hub) or docker-compose.farm.yml
+# (farm + hub) from the C:\repo\Voxply\hub\ directory instead.

@@ -1,0 +1,53 @@
+# Farm + hub setup — farm handles auth, hub handles community state.
+#
+# Quick start:
+#   docker compose -f docker-compose.farm.yml up -d
+#
+# Set VOXPLY_FARM_URL to the farm's externally reachable URL before starting.
+# The hub will discover the farm at startup and delegate auth to it.
+
+services:
+  farm:
+    image: ghcr.io/voxply/farm:latest
+    # build:
+    #   context: .
+    #   dockerfile: farm/Dockerfile
+    ports:
+      - "4000:4000"
+    volumes:
+      - farm-data:/data
+    environment:
+      VOXPLY_FARM_HTTP_PORT: "4000"
+      # Must match the URL clients and hubs use to reach the farm externally:
+      VOXPLY_FARM_URL: "${VOXPLY_FARM_URL:-http://localhost:4000}"
+      # VOXPLY_LOG_FORMAT: json
+      # VOXPLY_SENTRY_DSN: https://...@sentry.io/...
+    restart: unless-stopped
+
+  hub:
+    image: ghcr.io/voxply/hub:latest
+    # build:
+    #   context: .
+    #   dockerfile: hub/Dockerfile
+    ports:
+      - "3000:3000"
+      - "3001:3001/udp"
+    volumes:
+      - hub-data:/data
+      # - /etc/letsencrypt/live/your.domain:/certs:ro
+    environment:
+      VOXPLY_HTTP_PORT: "3000"
+      VOXPLY_VOICE_UDP_PORT: "3001"
+      # Point the hub at the farm so it delegates auth:
+      VOXPLY_FARM_URL: http://farm:4000
+      # VOXPLY_TLS_CERT: /certs/fullchain.pem
+      # VOXPLY_TLS_KEY: /certs/privkey.pem
+      # VOXPLY_LOG_FORMAT: json
+      # VOXPLY_SENTRY_DSN: https://...@sentry.io/...
+    depends_on:
+      - farm
+    restart: unless-stopped
+
+volumes:
+  farm-data:
+  hub-data:
