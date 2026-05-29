@@ -251,6 +251,26 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/channels/{channel_id}/posts/{post_id}/lock",
             post(routes::posts::lock_post).delete(routes::posts::unlock_post),
         )
+        // ---- Gaming: game install (Tier 1 minimal) + Tier 2 sessions ----
+        .route("/admin/games", post(routes::games::install_game))
+        .route(
+            "/channels/{channel_id}/game-sessions",
+            post(routes::games::create_session),
+        )
+        .route("/game-sessions/{session_id}/join", post(routes::games::join_session))
+        .route("/game-sessions/{session_id}", get(routes::games::get_session))
+        .route(
+            "/game-sessions/{session_id}/state",
+            post(routes::games::patch_state),
+        )
+        .route(
+            "/game-sessions/{session_id}/shared-kv/{key}",
+            post(routes::games::set_shared_kv).get(routes::games::get_shared_kv),
+        )
+        .route(
+            "/game-sessions/{session_id}",
+            delete(routes::games::end_session),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

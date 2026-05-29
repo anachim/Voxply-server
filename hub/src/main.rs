@@ -147,6 +147,7 @@ async fn main() -> Result<()> {
         farm_url,
         cached_farm_pubkey,
         last_farm_pubkey_fetch,
+        active_game_sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     // Bind voice UDP socket and start forwarding task

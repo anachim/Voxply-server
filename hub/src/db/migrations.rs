@@ -1309,6 +1309,44 @@ pub async fn run(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // ---- Gaming Tier 2: session persistence + shared KV ----
+    // game_sessions: one row per live (or recently ended) session. The snapshot
+    // blob is written only when the game calls voxply:game:snapshot; otherwise
+    // authoritative state is purely in-memory.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS game_sessions (
+            id           TEXT PRIMARY KEY,
+            channel_id   TEXT NOT NULL,
+            game_id      TEXT NOT NULL,
+            host_pubkey  TEXT NOT NULL,
+            state_json   TEXT NOT NULL DEFAULT '{}',
+            created_at   TEXT NOT NULL,
+            ended_at     TEXT
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // game_shared_kv: community-axis leaderboard / shared world per
+    // (session_id, key). session_id scoping keeps different game instances
+    // independent; the client layer maps game_id + channel_id to session_id.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS game_shared_kv (
+            session_id TEXT NOT NULL,
+            key        TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, key)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Seed start_game permission into builtin-everyone role so all members can
+    // start sessions by default; admins can restrict via role management.
+    sqlx::query("INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES ('builtin-everyone', 'start_game')")
+        .execute(pool).await?;
+
     tracing::info!("Database migrations complete");
     Ok(())
 }

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -76,6 +76,25 @@ pub struct ScreenChunkEvent {
     pub data: Bytes,
 }
 
+/// In-memory state for one live game session.
+///
+/// The hub is a pure relay for Tier 2: it tracks the roster and the last
+/// snapshot (if the game opted into durability), but never interprets the
+/// game's own state payload. `in_memory_state` is the latest snapshot blob
+/// supplied by `game_snapshot` frames; it is opaque to the hub.
+#[derive(Clone, Debug)]
+pub struct GameSessionState {
+    pub id: String,
+    pub channel_id: String,
+    pub game_id: String,
+    pub host_pubkey: String,
+    /// Roster: set of pubkeys currently in the session.
+    pub players: HashSet<String>,
+    /// Latest author-supplied state snapshot. Opaque JSON; only written when
+    /// the game calls the snapshot SDK path.
+    pub in_memory_state: serde_json::Value,
+}
+
 pub struct AppState {
     pub hub_name: String,
     pub hub_identity: Identity,
@@ -108,6 +127,12 @@ pub struct AppState {
     /// broadcast so we can push targeted hub_event messages without looping
     /// through every connected client.
     pub bot_sessions: RwLock<HashMap<String, mpsc::Sender<String>>>,
+
+    // ---- Gaming Tier 2 ----
+    /// In-memory index of live game sessions: session_id → GameSessionState.
+    /// Cleared on restart; the DB `game_sessions` table holds durable
+    /// snapshots for games that opt into persistence.
+    pub active_game_sessions: Arc<Mutex<HashMap<String, GameSessionState>>>,
 
     // ---- Farm integration (Phase 1, dual-issue step 1) ----
 

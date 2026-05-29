@@ -181,6 +181,11 @@ pub enum ChatEvent {
     /// reply_created, reply_updated, reply_deleted). The payload is the
     /// fully-serialised JSON value carried in the WS envelope.
     Forum { channel_id: String },
+    /// Any game-session event (created / joined / left / state-updated / ended).
+    /// We carry a single variant here because the WS dispatcher only needs to
+    /// match by channel_id for subscription filtering; the full typed envelope
+    /// is pre-serialised into the Arc<str> that travels alongside.
+    Game { channel_id: String },
 }
 
 impl ChatEvent {
@@ -193,7 +198,8 @@ impl ChatEvent {
             | ChatEvent::Typing { channel_id, .. }
             | ChatEvent::ScreenShareStarted { channel_id, .. }
             | ChatEvent::ScreenShareStopped { channel_id, .. }
-            | ChatEvent::Forum { channel_id } => channel_id,
+            | ChatEvent::Forum { channel_id }
+            | ChatEvent::Game { channel_id } => channel_id,
         }
     }
 }
@@ -367,6 +373,45 @@ pub enum WsServerMessage {
     ForumEvent {
         channel_id: String,
         event: serde_json::Value,
+    },
+
+    // ---- Gaming Tier 2: game session envelopes ----
+
+    /// A new game session was created in a channel.
+    #[serde(rename = "game_session_created")]
+    GameSessionCreated {
+        session_id: String,
+        channel_id: String,
+        game_id: String,
+        host_pubkey: String,
+    },
+
+    /// A player joined an existing game session.
+    #[serde(rename = "game_session_joined")]
+    GameSessionJoined {
+        session_id: String,
+        player_pubkey: String,
+    },
+
+    /// A player left a game session (voluntary leave or disconnect).
+    #[serde(rename = "game_session_left")]
+    GameSessionLeft {
+        session_id: String,
+        player_pubkey: String,
+    },
+
+    /// The host posted a state patch (opaque JSON). Relayed to all roster
+    /// members so clients can apply it to their local view.
+    #[serde(rename = "game_state_updated")]
+    GameStateUpdated {
+        session_id: String,
+        patch: serde_json::Value,
+    },
+
+    /// The session ended (normal completion, abandonment, or forced deletion).
+    #[serde(rename = "game_session_ended")]
+    GameSessionEnded {
+        session_id: String,
     },
 }
 
